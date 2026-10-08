@@ -32,6 +32,7 @@ export type Status = {
   time?: string;
   timezone?: string;
   time_synced?: boolean;
+  fallback_video?: boolean;
 };
 export type Settings = {
   hdmi_mode: string;
@@ -44,7 +45,11 @@ export type Settings = {
   hdmi_led_pin: number | null;
   beep_until_time_synced: boolean;
 };
-export type ImageEntry = { id: string; url: string };
+export type ImageEntry = {
+  id: string;
+  url: string;
+  kind?: "image" | "video";
+};
 export type Sample = {
   t: number;
   bitrate_mbps: number | null;

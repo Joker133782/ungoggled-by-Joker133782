@@ -110,8 +110,9 @@ impl Store {
         Ok(())
     }
 }
+/// Fallback library entries: still images (`.png`) and looped videos (`.h264`).
 pub fn valid_id(id: &str) -> bool {
-    id.ends_with(".png")
+    (id.ends_with(".png") || id.ends_with(".h264"))
         && id.len() <= 64
         && id
             .bytes()

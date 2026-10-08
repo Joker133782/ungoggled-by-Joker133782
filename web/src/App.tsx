@@ -152,6 +152,8 @@ export default function App() {
     (status?.bitrate_mbps ?? 0) > 0 &&
     !connectionError;
   const selected = images.find((i) => i.id === settings?.fallback_image);
+  const selectedIsVideo = selected?.kind === "video";
+  const videoCount = images.filter((i) => i.kind === "video").length;
   const modes = Array.from(new Set(status?.hdmi_modes ?? []));
   // Without a reachable receiver the three states are unknown, not "No".
   const known = !!status && !connectionError;
@@ -296,7 +298,7 @@ export default function App() {
             </div>
             <Preview
               enabled={!!settings?.preview_enabled && !!live}
-              fallback={selected?.url}
+              fallback={selectedIsVideo ? undefined : selected?.url}
               state={
                 live
                   ? "live"
@@ -312,7 +314,9 @@ export default function App() {
                     ? "640 × 360 · up to 5 fps"
                     : "Preview disabled"
                   : status?.hdmi === "fallback"
-                    ? "Fallback on HDMI"
+                    ? status?.fallback_video
+                      ? "Fallback video looping on HDMI"
+                      : "Fallback on HDMI"
                     : "Waiting for video"}
               </span>
             </div>
@@ -387,7 +391,9 @@ export default function App() {
           <hr />
           <h2>Fallback image</h2>
           <div className="fallback-preview">
-            {selected ? (
+            {selectedIsVideo ? (
+              <span>▶ Video loop selected</span>
+            ) : selected ? (
               <img src={selected.url} alt="Selected HDMI fallback" />
             ) : (
               <span>Solid dark background</span>
@@ -412,7 +418,8 @@ export default function App() {
                 className={
                   settings?.fallback_image === img.id ? "selected" : ""
                 }
-                aria-label={`Select fallback image ${i + 1}`}
+                aria-label={`Select fallback ${img.kind === "video" ? "video" : "image"} ${i + 1}`}
+                title={img.kind === "video" ? "Video loop" : undefined}
                 disabled={busy || updateBusy}
                 onClick={() => {
                   if (settings)
@@ -421,17 +428,21 @@ export default function App() {
                     );
                 }}
               >
-                <img src={img.url} alt={`Fallback ${i + 1}`} />
+                {img.kind === "video" ? (
+                  <span className="video-tile">▶</span>
+                ) : (
+                  <img src={img.url} alt={`Fallback ${i + 1}`} />
+                )}
               </button>
             ))}
           </div>
           <div className="actions">
             <label className={`button ${busy ? "disabled" : ""}`}>
-              Upload image
+              Upload image or video
               <input
                 className="file-input"
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,.mp4,.mov"
                 disabled={busy || updateBusy || !settings}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
@@ -474,8 +485,11 @@ export default function App() {
             )}
           </div>
           <p className="help">
-            Shown when video stops or the receiver is stopped. PNG, JPEG or
-            WebP, up to 12 MiB. Converted automatically; aspect ratio preserved.
+            Shown when video stops or the receiver is stopped. Images: PNG, JPEG
+            or WebP, up to 12 MiB, aspect ratio preserved. Videos: MP4 with
+            H.264 (not HEVC), up to 1920×1080 and 64 MiB, played in an endless
+            loop ({videoCount}/4 stored). Converting a video takes a few
+            seconds.
           </p>
         </section>
       </div>

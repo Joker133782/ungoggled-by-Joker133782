@@ -50,7 +50,7 @@ pub fn router(app: App, web: std::path::PathBuf) -> Router {
         .route("/api/images/{id}", get(image_file).delete(remove_image))
         .route("/api/preview.jpg", get(preview))
         .route("/api/wifi", get(get_wifi).post(save_wifi))
-        .layer(DefaultBodyLimit::max(assets::MAX_UPLOAD + 65536))
+        .layer(DefaultBodyLimit::max(assets::MAX_VIDEO_UPLOAD + 65536))
         .merge(crate::update::api::routes())
         .fallback_service(ServeDir::new(web))
         .with_state(app)
@@ -161,7 +161,7 @@ async fn upload(
         .next_field()
         .await
         .map_err(bad)?
-        .ok_or_else(|| bad("Select an image"))?;
+        .ok_or_else(|| bad("Select an image or video"))?;
     let bytes = field.bytes().await.map_err(bad)?;
     let result = tokio::task::spawn_blocking(move || {
         let _lock = a.operations.lock().unwrap();
@@ -177,12 +177,17 @@ async fn image_file(State(a): State<App>, Path(id): Path<String>) -> Response {
     if !settings::valid_id(&id) {
         return StatusCode::NOT_FOUND.into_response();
     }
+    let kind = if assets::is_video_id(&id) {
+        "video/h264"
+    } else {
+        "image/png"
+    };
     match tokio::task::spawn_blocking(move || std::fs::read(a.settings.dir.join("images").join(id)))
         .await
     {
         Ok(Ok(bytes)) => (
             [
-                (header::CONTENT_TYPE, "image/png"),
+                (header::CONTENT_TYPE, kind),
                 (header::CACHE_CONTROL, "private, max-age=3600"),
             ],
             bytes,
@@ -206,7 +211,7 @@ async fn remove_image(
         if a.settings.get().fallback_image.as_deref() == Some(&id) {
             anyhow::bail!("Select another fallback before deleting this image");
         }
-        std::fs::remove_file(a.settings.dir.join("images").join(id))?;
+        assets::remove(&a.settings.dir.join("images"), &id)?;
         Ok(())
     })
     .await

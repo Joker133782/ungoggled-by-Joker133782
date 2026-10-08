@@ -12,6 +12,8 @@ separately.
 - Hardware-decoded video over HDMI, with automatic 1080p mode selection.
 - Configurable HDMI resolution, refresh rate and progressive or interlaced scan from the display's supported modes.
 - A selectable fallback image when video is lost or the receiver is stopped.
+- Optional looped fallback video (MP4 with H.264, up to 1080p and 64 MiB), demuxed
+  on upload without re-encoding and hardware-decoded like the live feed.
 - Browser preview at up to **640 × 360, 5 fps**, independently switchable.
 - Incoming resolution, measured camera fps, HDMI refresh rate and rendered fps.
 - Raspberry Pi temperature and a **30-minute history**, sampled once per second

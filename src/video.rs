@@ -75,6 +75,116 @@ impl Drop for Player {
     }
 }
 
+/// Whose frames a decoder pipeline shows. Only the live goggles stream reports
+/// input format, HDMI playback state and preview frames.
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Live,
+    Fallback,
+}
+
+/// A fallback video fed in an endless loop through the live decoder pipeline,
+/// paced at its recorded frame rate as if it came from the goggles.
+struct Loop {
+    stop: Arc<AtomicBool>,
+    feeder: Option<thread::JoinHandle<()>>,
+    player: Option<Player>,
+    started: Instant,
+}
+impl Loop {
+    /// False once the pipeline exited or stopped rendering, so it is restarted.
+    fn healthy(&mut self) -> bool {
+        let Some(p) = self.player.as_mut() else {
+            return false;
+        };
+        if p.child.try_wait().ok().flatten().is_some() {
+            return false;
+        }
+        if self.feeder.as_ref().is_some_and(|f| f.is_finished()) {
+            return false;
+        }
+        let beat = *p.heartbeat.lock().unwrap();
+        let grace = self.started.elapsed() < Duration::from_secs(5);
+        grace || beat.is_some_and(|t| t.elapsed() < Duration::from_secs(3))
+    }
+}
+impl Drop for Loop {
+    fn drop(&mut self) {
+        // Stop the feeder first, then kill and reap the decoder. Only after
+        // this returns is the hardware decoder and HDMI overlay free again.
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(f) = self.feeder.take() {
+            let _ = f.join();
+        }
+        self.player = None;
+    }
+}
+
+/// Split an Annex-B file into NAL units (each including its start code).
+fn nal_units(bytes: &[u8]) -> anyhow::Result<Vec<Vec<u8>>> {
+    let mut annex = crate::h264::AnnexB::default();
+    let mut units = annex.feed(bytes).map_err(anyhow::Error::msg)?;
+    // A trailing start code flushes the final unit.
+    units.extend(annex.feed(&[0, 0, 1]).map_err(anyhow::Error::msg)?);
+    if !units.iter().any(|n| n.get(3).map(|b| b & 31) == Some(7)) {
+        anyhow::bail!("Fallback video has no SPS");
+    }
+    Ok(units)
+}
+/// The first slice of a picture starts a new frame: VCL NAL (1 or 5) with
+/// first_mb_in_slice == 0, which is a leading 1 bit in Exp-Golomb coding.
+fn starts_frame(nal: &[u8]) -> bool {
+    matches!(nal.get(3).map(|v| v & 31), Some(1 | 5)) && nal.get(4).is_some_and(|v| v & 0x80 != 0)
+}
+
+fn spawn_loop(args: &WorkerArgs, video: &Path, report: Report) -> anyhow::Result<Loop> {
+    let info = crate::assets::video_info(video);
+    let units = nal_units(&std::fs::read(video)?)?;
+    let mut player = spawn_player(args, false, report, Arc::default(), Role::Fallback)?;
+    let mut stdin = player
+        .child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Decoder input missing"))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    let frame = info.frame_duration();
+    let feeder = thread::spawn(move || {
+        let mut deadline = Instant::now();
+        loop {
+            for nal in &units {
+                if stopped.load(Ordering::Relaxed) {
+                    return;
+                }
+                if starts_frame(nal) {
+                    let now = Instant::now();
+                    // After a stall, resume at real time instead of racing to catch up.
+                    if now > deadline + Duration::from_millis(500) {
+                        deadline = now;
+                    }
+                    while Instant::now() < deadline {
+                        if stopped.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let left = deadline.saturating_duration_since(Instant::now());
+                        thread::sleep(left.min(Duration::from_millis(20)));
+                    }
+                    deadline += frame;
+                }
+                if write_deadline(&mut stdin, nal).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    Ok(Loop {
+        stop,
+        feeder: Some(feeder),
+        player: Some(player),
+        started: Instant::now(),
+    })
+}
+
 pub fn start(
     args: WorkerArgs,
     store: Store,
@@ -96,6 +206,8 @@ pub fn start(
     thread::spawn(move || receive(socket, tx, q, loss, receive_stop));
     Ok(thread::spawn(move || {
         let mut child: Option<Player> = None;
+        let mut fallback: Option<Loop> = None;
+        let mut fallback_retry = Instant::now() - Duration::from_secs(5);
         let mut display: Option<crate::display::Display> = None;
         let mut current = store.get();
         let mut annex = crate::h264::AnnexB::default();
@@ -110,6 +222,7 @@ pub fn start(
             let settings = store.get();
             if settings != current {
                 child = None;
+                fallback = None;
                 display = None;
                 current = settings;
                 annex = Default::default();
@@ -118,6 +231,7 @@ pub fn start(
             }
             if display.as_ref().is_some_and(|d| d.needs_upgrade()) {
                 child = None;
+                fallback = None;
                 display = None;
             }
             if args.output == "hdmi"
@@ -125,9 +239,11 @@ pub fn start(
                 && prepare_at.elapsed() > Duration::from_secs(3)
             {
                 prepare_at = Instant::now();
+                // A fallback video plays on the overlay; the primary plane stays dark.
                 let image = current
                     .fallback_image
                     .as_ref()
+                    .filter(|id| !crate::assets::is_video_id(id))
                     .map(|id| store.dir.join("images").join(id));
                 match crate::display::Display::prepare(
                     args.connector,
@@ -160,10 +276,35 @@ pub fn start(
             if input_gone || decoder_stalled {
                 child = None;
             }
+            if fallback.as_mut().is_some_and(|l| !l.healthy()) {
+                fallback = None;
+                fallback_retry = Instant::now();
+            }
+            // Loop the fallback video only while the goggles send nothing, so
+            // a brief live decoder restart never flickers to the loop.
+            let fallback_video = current
+                .fallback_image
+                .as_ref()
+                .filter(|id| crate::assets::is_video_id(id))
+                .map(|id| store.dir.join("images").join(id));
+            if let Some(video) = &fallback_video
+                && child.is_none()
+                && fallback.is_none()
+                && input_gone
+                && args.output == "hdmi"
+                && display.is_some()
+                && fallback_retry.elapsed() > Duration::from_secs(3)
+            {
+                fallback_retry = Instant::now();
+                match spawn_loop(&args, video, report.clone()) {
+                    Ok(l) => fallback = Some(l),
+                    Err(e) => report(json!({"message":format!("Fallback video: {e:#}")})),
+                }
+            }
             if child.is_none() {
                 *preview.lock().unwrap() = None;
                 report(
-                    json!({"hdmi":if args.output=="hdmi" && display.is_some(){"fallback"}else{"idle"},"output_fps":0}),
+                    json!({"hdmi":if args.output=="hdmi" && display.is_some(){"fallback"}else{"idle"},"output_fps":0,"fallback_video":fallback.is_some()}),
                 );
             }
             if stats_at.elapsed() >= Duration::from_secs(1) {
@@ -217,6 +358,8 @@ pub fn start(
                     if nal.get(3).map(|b| b & 31) != Some(7) {
                         continue;
                     }
+                    // Hand the decoder and HDMI overlay over from the loop.
+                    fallback = None;
                     let mut playback_args = args.clone();
                     if args.output == "hdmi" && display.is_none() {
                         playback_args.output = "test".into();
@@ -226,6 +369,7 @@ pub fn start(
                         current.preview_enabled,
                         report.clone(),
                         preview.clone(),
+                        Role::Live,
                     ) {
                         Ok(p) => {
                             child = Some(p);
@@ -247,6 +391,7 @@ pub fn start(
                 }
             }
         }
+        drop(fallback);
         drop(child);
         drop(display);
         let _ = std::fs::remove_file(&args.video_socket);
@@ -305,6 +450,7 @@ fn spawn_player(
     show_preview: bool,
     report: Report,
     preview: Preview,
+    role: Role,
 ) -> anyhow::Result<Player> {
     let mut cmd = Command::new("gst-launch-1.0");
     cmd.args([
@@ -421,17 +567,18 @@ fn spawn_player(
     let beat = heartbeat.clone();
     let running = active.clone();
     let hdmi = args.output == "hdmi";
+    let live = role == Role::Live;
     thread::spawn(move || {
         for line in BufReader::new(bus).lines().map_while(Result::ok) {
             if !running.load(Ordering::Relaxed) {
                 break;
             }
-            if let Some((w, h, fps)) = input_caps(&line) {
+            if let Some((w, h, fps)) = input_caps(&line).filter(|_| live) {
                 report(json!({"input_width":w,"input_height":h,"input_nominal_fps":fps}));
             }
             if let Some((frames, fps)) = frame_stats(&line) {
                 *beat.lock().unwrap() = Some(Instant::now());
-                if hdmi {
+                if hdmi && live {
                     report(json!({"hdmi":"playing","output_frames":frames,"output_fps":fps}));
                 }
             }
@@ -487,7 +634,7 @@ fn frame_stats(line: &str) -> Option<(u64, f64)> {
     let fps: f64 = rest.split(',').next()?.trim().parse().ok()?;
     fps.is_finite().then_some((n, fps))
 }
-fn input_caps(line: &str) -> Option<(u32, u32, Option<f64>)> {
+pub(crate) fn input_caps(line: &str) -> Option<(u32, u32, Option<f64>)> {
     if !line.contains("h264parse0.GstPad:src: caps =") {
         return None;
     }
@@ -525,5 +672,68 @@ mod tests {
             ),
             Some((1920, 1080, Some(30000.0 / 1001.0)))
         );
+    }
+    #[test]
+    fn fallback_file_splits_into_nals_and_frames() {
+        // SPS, PPS, IDR slice (first_mb 0), second slice of the same picture
+        // (first_mb != 0), then a P slice starting the next picture.
+        let file = [
+            &[0, 0, 0, 1, 0x67, 0x64][..],
+            &[0, 0, 0, 1, 0x68, 0xee][..],
+            &[0, 0, 1, 0x65, 0x88, 0x01][..],
+            &[0, 0, 1, 0x65, 0x40, 0x02][..],
+            &[0, 0, 1, 0x41, 0x9a, 0x03][..],
+        ]
+        .concat();
+        let units = nal_units(&file).unwrap();
+        assert_eq!(units.len(), 5);
+        assert_eq!(units[4], [0, 0, 1, 0x41, 0x9a, 0x03]);
+        let frames: Vec<bool> = units.iter().map(|n| starts_frame(n)).collect();
+        assert_eq!(frames, [false, false, true, false, true]);
+        assert!(nal_units(&[0, 0, 1, 0x65, 0x88]).is_err(), "SPS required");
+    }
+
+    /// End-to-end with real GStreamer: upload converts MP4 without re-encoding,
+    /// rejects HEVC and >1080p, and the loop keeps rendering past the clip end.
+    /// `UNGOGGLED_TEST_VIDEOS=<dir with h264.mp4 hevc.mp4 uhd.mp4> cargo test -- --ignored`
+    #[test]
+    #[ignore]
+    fn fallback_video_loops_with_gstreamer() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            worker: WorkerArgs,
+        }
+        let src = std::path::PathBuf::from(std::env::var("UNGOGGLED_TEST_VIDEOS").unwrap());
+        let dir = std::env::temp_dir().join(format!("ungoggled-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read = |n: &str| std::fs::read(src.join(n)).unwrap();
+        let hevc = crate::assets::upload(&dir, &read("hevc.mp4")).unwrap_err();
+        assert!(hevc.to_string().contains("not H.264"), "{hevc}");
+        let uhd = crate::assets::upload(&dir, &read("uhd.mp4")).unwrap_err();
+        assert!(uhd.to_string().contains("1920"), "{uhd}");
+        let ok = crate::assets::upload(&dir, &read("h264.mp4")).unwrap();
+        assert_eq!(ok["kind"], "video");
+        let id = ok["id"].as_str().unwrap();
+        let video = dir.join(id);
+        let info = crate::assets::video_info(&video);
+        assert_eq!((info.width, info.height), (1920, 1080));
+        assert!((info.fps - 30.0).abs() < 0.01);
+        let listed = crate::assets::list(&dir);
+        assert_eq!(listed.len(), 1, "temporary files must not be listed");
+        let args = Cli::parse_from(["t", "--output", "test", "--decoder", "avdec_h264"]).worker;
+        let mut l = spawn_loop(&args, &video, Arc::new(|_| {})).unwrap();
+        // The 4 s clip must keep playing beyond its end.
+        for _ in 0..9 {
+            thread::sleep(Duration::from_secs(1));
+            assert!(l.healthy(), "loop stopped rendering");
+        }
+        let stop = Instant::now();
+        drop(l);
+        assert!(stop.elapsed() < Duration::from_secs(2), "slow hand-over");
+        crate::assets::remove(&dir, id).unwrap();
+        assert!(!dir.join(id).with_extension("json").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
