@@ -5,13 +5,20 @@
 //! keepalives on 0x7530 (see `g2.rs`). The goggles do not identify their
 //! generation in a documented way before video, so in `auto` mode the session
 //! tries one protocol and switches to the other while no video arrives. The
-//! protocol that produced video is kept for the rest of the session and tried
-//! first on the next connection.
+//! protocol that produced video is kept for the rest of the session.
+//!
+//! Across connections, the receiver remembers which protocol worked for each
+//! set of AOA identification strings the goggles sent while connecting. Strings
+//! that only ever produced video with one protocol select it first. Unknown
+//! strings, or strings seen with both generations, start with the quick
+//! Goggles 3 probe, so swapping goggles never waits on a stale guess for long.
 use crate::{clock, g2, protocol};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     io,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicU8, AtomicU64, Ordering},
     thread,
     time::{Duration, Instant},
@@ -77,8 +84,69 @@ pub struct Config {
     pub mode: String,
     pub g3_port: u16,
     pub sync_time: bool,
-    /// Remembers the protocol that last produced video (auto mode only).
+    /// Learned protocol per goggles identification (auto mode only).
     pub memory: Option<PathBuf>,
+    /// AOA identification strings the goggles sent while connecting.
+    pub aoa: Vec<String>,
+}
+
+/// Learned protocols, keyed by a hash of the AOA identification strings.
+#[derive(Default, Serialize, Deserialize)]
+struct Memory {
+    /// Oldest first; bounded so the file stays small.
+    goggles: Vec<Learned>,
+}
+#[derive(Serialize, Deserialize)]
+struct Learned {
+    id: String,
+    /// Protocols that produced video for this identification.
+    protocols: Vec<String>,
+}
+const MEMORY_LIMIT: usize = 32;
+
+impl Memory {
+    fn load(path: &std::path::Path) -> Self {
+        std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+    /// The protocol to try first, when this identification only ever worked
+    /// with one of them.
+    fn preferred(&self, id: &str) -> Option<Goggles> {
+        let entry = self.goggles.iter().find(|e| e.id == id)?;
+        match entry.protocols.as_slice() {
+            [only] => Goggles::from_id(only),
+            _ => None,
+        }
+    }
+    /// Record a success; returns whether anything changed.
+    fn learn(&mut self, id: &str, g: Goggles) -> bool {
+        if let Some(entry) = self.goggles.iter_mut().find(|e| e.id == id) {
+            if entry.protocols.iter().any(|p| p == g.id()) {
+                return false;
+            }
+            entry.protocols.push(g.id().into());
+            return true;
+        }
+        self.goggles.push(Learned {
+            id: id.into(),
+            protocols: vec![g.id().into()],
+        });
+        if self.goggles.len() > MEMORY_LIMIT {
+            self.goggles.remove(0);
+        }
+        true
+    }
+}
+
+/// Stable identification of the goggles from their AOA strings, if any.
+pub fn identification(aoa: &[String]) -> Option<String> {
+    if aoa.iter().all(|s| s.is_empty()) {
+        return None;
+    }
+    let digest = Sha256::digest(aoa.join("\u{1f}").as_bytes());
+    Some(crate::update::package::hex(&digest[..8]))
 }
 
 pub struct Timing {
@@ -86,8 +154,8 @@ pub struct Timing {
     pub g3_probe: Duration,
     /// Includes the ~3.3 s Goggles 2 arming burst.
     pub g2_probe: Duration,
-    /// Extra patience for the protocol that worked last time, so a drone that is
-    /// still booting does not bounce a known-good protocol.
+    /// Extra patience for a protocol learned for these goggles, so a drone that
+    /// is still booting does not bounce a known-good protocol.
     pub remembered_bonus: Duration,
     pub g3_period: Duration,
     pub arm_gap_cap: Duration,
@@ -102,9 +170,9 @@ pub struct Timing {
 impl Default for Timing {
     fn default() -> Self {
         Self {
-            g3_probe: Duration::from_secs(10),
-            g2_probe: Duration::from_secs(15),
-            remembered_bonus: Duration::from_secs(10),
+            g3_probe: Duration::from_secs(8),
+            g2_probe: Duration::from_secs(12),
+            remembered_bonus: Duration::from_secs(5),
             g3_period: Duration::from_secs(3),
             arm_gap_cap: g2::ARM_GAP_CAP,
             sustain_gap_cap: None,
@@ -115,10 +183,6 @@ impl Default for Timing {
     }
 }
 
-pub fn memory_path(video_socket: &Path) -> Option<PathBuf> {
-    video_socket.parent().map(|d| d.join("goggles-protocol"))
-}
-
 struct Driver<'a> {
     cfg: &'a Config,
     shared: &'a Shared,
@@ -127,6 +191,7 @@ struct Driver<'a> {
     report: &'a dyn Fn(Value),
     seq: u16,
     locked: bool,
+    id: Option<String>,
     /// Video byte count and time of its last increase.
     seen: u64,
     last_video: Option<Instant>,
@@ -141,12 +206,18 @@ pub fn drive(
     report: &dyn Fn(Value),
 ) -> io::Result<()> {
     let forced = Goggles::from_id(&cfg.mode);
-    let remembered = forced
-        .is_none()
-        .then_some(cfg.memory.as_ref())
-        .flatten()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| Goggles::from_id(&s));
+    let id = identification(&cfg.aoa);
+    let remembered = match (forced, &cfg.memory, &id) {
+        (None, Some(path), Some(id)) => Memory::load(path).preferred(id),
+        _ => None,
+    };
+    if forced.is_none() {
+        eprintln!(
+            "Goggles identification {}: {}",
+            id.as_deref().unwrap_or("none"),
+            remembered.map_or("unknown or ambiguous; Goggles 3 first", |g| g.label())
+        );
+    }
     let mut current = forced.or(remembered).unwrap_or(Goggles::G3);
     let mut d = Driver {
         cfg,
@@ -156,6 +227,7 @@ pub fn drive(
         report,
         seq: 0x100,
         locked: false,
+        id,
         seen: shared.video.load(Ordering::Relaxed),
         last_video: None,
     };
@@ -211,10 +283,24 @@ impl Driver<'_> {
             if !self.locked {
                 self.locked = true;
                 if Goggles::from_id(&self.cfg.mode).is_none()
-                    && let Some(path) = &self.cfg.memory
-                    && let Err(e) = std::fs::write(path, g.id())
+                    && let (Some(path), Some(id)) = (&self.cfg.memory, &self.id)
                 {
-                    eprintln!("Cannot remember goggles protocol: {e}");
+                    let mut memory = Memory::load(path);
+                    // Write only when something new was learned: SD card wear.
+                    if memory.learn(id, g)
+                        && let Err(e) = path
+                            .parent()
+                            .map_or(Ok(()), std::fs::create_dir_all)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|()| {
+                                crate::settings::atomic_write(
+                                    path,
+                                    &serde_json::to_vec_pretty(&memory)?,
+                                )
+                            })
+                    {
+                        eprintln!("Cannot remember goggles protocol: {e:#}");
+                    }
                 }
                 self.announce(g);
             }
@@ -355,6 +441,7 @@ mod tests {
         model: Model,
         mode: &str,
         memory: Option<PathBuf>,
+        aoa: &[&str],
         run_for: Duration,
         drone_on: Duration,
         drone_off: Option<(Duration, Duration)>,
@@ -389,6 +476,7 @@ mod tests {
             g3_port: 0x5749,
             sync_time: false,
             memory,
+            aoa: aoa.iter().map(|s| s.to_string()).collect(),
         };
         let t = fast();
         let l = log.clone();
@@ -453,23 +541,70 @@ mod tests {
     }
     const S: fn(u64) -> Duration = Duration::from_millis;
 
-    #[test]
-    fn goggles3_locks_immediately_and_never_sends_goggles2_requests() {
-        let mem = temp("g3");
-        let (log, events) = simulate(Model::G3, "auto", Some(mem.clone()), S(1500), S(0), None);
-        assert_eq!(final_state(&events), ("goggles3".into(), "video".into()));
-        assert_eq!(on_port(&log, 0x7530), 0);
-        assert_eq!(std::fs::read_to_string(&mem).unwrap(), "goggles3");
+    /// AOA strings the Goggles 2 reference recorded; Goggles 3 strings are
+    /// not documented, so the tests cover both distinct and identical ones.
+    const G2_AOA: &[&str] = &[
+        "DJI",
+        "com.dji.logiclink",
+        "DJI glass",
+        "v0.0.0.0",
+        "www.dji.com",
+        "000000000000000",
+    ];
+    const OTHER_AOA: &[&str] = &[
+        "DJI",
+        "com.dji.logiclink",
+        "DJI goggles 3",
+        "v1.0.0.0",
+        "www.dji.com",
+        "1581F6Z9C23A",
+    ];
+    fn learned(mem: &std::path::Path, aoa: &[&str]) -> Vec<String> {
+        let id = identification(&aoa.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        Memory::load(mem)
+            .goggles
+            .into_iter()
+            .find(|e| e.id == id)
+            .map(|e| e.protocols)
+            .unwrap_or_default()
+    }
+    fn first_port(log: &Log) -> u16 {
+        log.lock().unwrap()[0].1
     }
 
     #[test]
-    fn goggles2_found_after_goggles3_probe_and_remembered() {
+    fn goggles3_locks_immediately_and_never_sends_goggles2_requests() {
+        let mem = temp("g3");
+        let (log, events) = simulate(
+            Model::G3,
+            "auto",
+            Some(mem.clone()),
+            OTHER_AOA,
+            S(1500),
+            S(0),
+            None,
+        );
+        assert_eq!(final_state(&events), ("goggles3".into(), "video".into()));
+        assert_eq!(on_port(&log, 0x7530), 0);
+        assert_eq!(learned(&mem, OTHER_AOA), ["goggles3"]);
+    }
+
+    #[test]
+    fn goggles2_found_after_goggles3_probe_and_learned() {
         let mem = temp("g2");
-        let (log, events) = simulate(Model::G2, "auto", Some(mem.clone()), S(2500), S(0), None);
+        let (log, events) = simulate(
+            Model::G2,
+            "auto",
+            Some(mem.clone()),
+            G2_AOA,
+            S(2500),
+            S(0),
+            None,
+        );
         assert_eq!(final_state(&events), ("goggles2".into(), "video".into()));
-        assert_eq!(std::fs::read_to_string(&mem).unwrap(), "goggles2");
+        assert_eq!(learned(&mem, G2_AOA), ["goggles2"]);
         // Once locked, no further Goggles 3 registrations are sent.
-        let locked_at = log
+        let first_g2 = log
             .lock()
             .unwrap()
             .iter()
@@ -480,7 +615,7 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .filter(|e| e.1 == 0x5749 && e.0 > locked_at)
+            .filter(|e| e.1 == 0x5749 && e.0 > first_g2)
             .count();
         assert_eq!(late_g3, 0);
         assert_eq!(
@@ -489,26 +624,152 @@ mod tests {
             "streaming goggles must not be re-armed"
         );
 
-        // The next connection starts with Goggles 2 straight away.
-        let (log, events) = simulate(Model::G2, "auto", Some(mem.clone()), S(800), S(0), None);
-        assert_eq!(log.lock().unwrap()[0].1, 0x7530);
+        // The same goggles start with Goggles 2 straight away next time.
+        let (log, events) = simulate(
+            Model::G2,
+            "auto",
+            Some(mem.clone()),
+            G2_AOA,
+            S(800),
+            S(0),
+            None,
+        );
+        assert_eq!(first_port(&log), 0x7530);
         assert_eq!(on_port(&log, 0x5749), 0);
         assert_eq!(final_state(&events).1, "video");
     }
 
     #[test]
-    fn goggles3_still_found_when_goggles2_was_remembered() {
-        let mem = temp("swap");
-        std::fs::write(&mem, "goggles2").unwrap();
-        let (_, events) = simulate(Model::G3, "auto", Some(mem.clone()), S(2500), S(0), None);
+    fn swapping_to_goggles3_with_different_identification_starts_with_goggles3() {
+        let mem = temp("swap-distinct");
+        simulate(
+            Model::G2,
+            "auto",
+            Some(mem.clone()),
+            G2_AOA,
+            S(2500),
+            S(0),
+            None,
+        );
+        assert_eq!(learned(&mem, G2_AOA), ["goggles2"]);
+        // A Goggles 3 pilot plugs in after the Goggles 2 flight.
+        let (log, events) = simulate(
+            Model::G3,
+            "auto",
+            Some(mem.clone()),
+            OTHER_AOA,
+            S(800),
+            S(0),
+            None,
+        );
+        assert_eq!(first_port(&log), 0x5749);
+        assert_eq!(on_port(&log, 0x7530), 0, "no Goggles 2 detour");
         assert_eq!(final_state(&events), ("goggles3".into(), "video".into()));
-        assert_eq!(std::fs::read_to_string(&mem).unwrap(), "goggles3");
+        // The Goggles 2 still start directly afterwards.
+        let (log, _) = simulate(
+            Model::G2,
+            "auto",
+            Some(mem.clone()),
+            G2_AOA,
+            S(800),
+            S(0),
+            None,
+        );
+        assert_eq!(first_port(&log), 0x7530);
+    }
+
+    #[test]
+    fn identical_identification_becomes_ambiguous_and_prefers_quick_goggles3_probe() {
+        let mem = temp("swap-same");
+        simulate(
+            Model::G2,
+            "auto",
+            Some(mem.clone()),
+            G2_AOA,
+            S(2500),
+            S(0),
+            None,
+        );
+        // Goggles 3 sending the same strings: one detour via Goggles 2...
+        let (log, events) = simulate(
+            Model::G3,
+            "auto",
+            Some(mem.clone()),
+            G2_AOA,
+            S(2500),
+            S(0),
+            None,
+        );
+        assert_eq!(first_port(&log), 0x7530);
+        assert_eq!(final_state(&events), ("goggles3".into(), "video".into()));
+        assert_eq!(learned(&mem, G2_AOA), ["goggles2", "goggles3"]);
+        // ...then both start with the short Goggles 3 probe and still work.
+        let (log, events) = simulate(
+            Model::G3,
+            "auto",
+            Some(mem.clone()),
+            G2_AOA,
+            S(800),
+            S(0),
+            None,
+        );
+        assert_eq!(on_port(&log, 0x7530), 0);
+        assert_eq!(final_state(&events), ("goggles3".into(), "video".into()));
+        let (log, events) = simulate(
+            Model::G2,
+            "auto",
+            Some(mem.clone()),
+            G2_AOA,
+            S(2500),
+            S(0),
+            None,
+        );
+        assert_eq!(first_port(&log), 0x5749);
+        assert_eq!(final_state(&events), ("goggles2".into(), "video".into()));
+    }
+
+    #[test]
+    fn without_identification_nothing_is_stored() {
+        let mem = temp("noid");
+        let (_, events) = simulate(
+            Model::G2,
+            "auto",
+            Some(mem.clone()),
+            &[],
+            S(2500),
+            S(0),
+            None,
+        );
+        assert_eq!(final_state(&events), ("goggles2".into(), "video".into()));
+        assert!(!mem.exists());
+    }
+
+    #[test]
+    fn memory_is_bounded_and_ignores_corrupt_files() {
+        let mem = temp("bounded");
+        std::fs::write(&mem, "not json").unwrap();
+        let (log, _) = simulate(
+            Model::G3,
+            "auto",
+            Some(mem.clone()),
+            OTHER_AOA,
+            S(600),
+            S(0),
+            None,
+        );
+        assert_eq!(first_port(&log), 0x5749);
+        let mut m = Memory::default();
+        for i in 0..40 {
+            m.learn(&format!("{i}"), Goggles::G3);
+        }
+        assert_eq!(m.goggles.len(), MEMORY_LIMIT);
+        assert_eq!(m.goggles[0].id, "8");
     }
 
     #[test]
     fn late_drone_power_on_is_found_by_alternating() {
         for model in [Model::G3, Model::G2] {
-            let (_, events) = simulate(model, "auto", None, S(4000), S(1200), None);
+            let (_, events) = simulate(model, "auto", None, G2_AOA, S(4000), S(1200), None);
             let want = if model == Model::G3 {
                 "goggles3"
             } else {
@@ -528,6 +789,7 @@ mod tests {
             Model::G2,
             "goggles2",
             None,
+            G2_AOA,
             S(3000),
             S(0),
             Some((S(800), S(1300))),
@@ -540,7 +802,7 @@ mod tests {
 
     #[test]
     fn forced_goggles3_never_switches() {
-        let (log, events) = simulate(Model::G2, "goggles3", None, S(1200), S(0), None);
+        let (log, events) = simulate(Model::G2, "goggles3", None, G2_AOA, S(1200), S(0), None);
         assert_eq!(on_port(&log, 0x7530), 0);
         assert_eq!(final_state(&events), ("goggles3".into(), "forced".into()));
     }

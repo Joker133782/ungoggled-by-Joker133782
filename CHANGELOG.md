@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+- Loop an uploaded MP4 (H.264, up to 1080p and 64 MiB) as the HDMI fallback while no video arrives. Uploads are demuxed without re-encoding and use the hardware decoder.
+- Experimental DJI Goggles 2 support. The receiver tries the Goggles 3 and Goggles 2 start sequences, keeps the one that produces video and remembers it per pair of goggles by their USB identification. `UNGOGGLED_GOGGLES` and `UNGOGGLED_ACCESSORY_PID` in `/etc/default/dji-hdmi` override the choice.
+- List installed versions in the web interface and switch back to an earlier one through the same safe transaction as an update, with automatic restore if it does not start.
+- Record updates, switches and boot recoveries in an update history.
+- Keep the SD-card image release, the active and preceding releases and one older update.
+
 ## 0.3.1
 
 - Set O3/O4 recording timestamps from the Pi clock after the goggles USB session starts.

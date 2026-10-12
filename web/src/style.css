@@ -654,3 +654,55 @@ footer {
   overflow: hidden;
   padding: 0;
 }
+
+.versions {
+  margin-top: 16px;
+}
+.release-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+}
+.release-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: 1px solid #303844;
+}
+.release-list li.current strong {
+  color: #e8eef5;
+}
+.release-list .build {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: #8c9caf;
+}
+.release-list .badge {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  background: #253041;
+  color: #b8c7d8;
+}
+.update-history {
+  margin-top: 14px;
+}
+.update-history ol {
+  padding-left: 18px;
+  margin: 8px 0 0;
+}
+.update-history li {
+  margin: 6px 0;
+  font-size: 13px;
+}
+.update-history li.rolled_back,
+.update-history li.failed {
+  color: #f0a3a3;
+}
+.update-history .when {
+  color: #8c9caf;
+}

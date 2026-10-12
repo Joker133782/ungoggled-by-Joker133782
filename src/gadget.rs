@@ -108,6 +108,7 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
             .into_owned()
     };
     let mut accessory = args.cold_accessory;
+    let mut aoa = vec![String::new(); 6];
     loop {
         let mut ep0 = OpenOptions::new()
             .read(true)
@@ -156,9 +157,13 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
                         (0x40, 52) if index < 6 && len <= 256 => {
                             let mut b = vec![0; len];
                             let n = control_read(&ep0, &mut b)?;
+                            let text = String::from_utf8_lossy(&b[..n])
+                                .trim_end_matches('\0')
+                                .to_owned();
                             event(
-                                json!({"phase":"aoa_negotiation","message":format!("AOA string {index}: {}",String::from_utf8_lossy(&b[..n]).trim_end_matches('\0'))}),
+                                json!({"phase":"aoa_negotiation","message":format!("AOA string {index}: {text}")}),
                             );
+                            aoa[index as usize] = text;
                         }
                         (0x40, 53) if len == 0 => {
                             control_read(&ep0, &mut [])?;
@@ -195,7 +200,7 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
                                 let input = open_ep(dir, 1)?;
                                 let output = open_ep(dir, 0x81)?;
                                 control_read(&ep0, &mut [])?;
-                                start_bulk(input, output, args.clone());
+                                start_bulk(input, output, args.clone(), aoa.clone());
                                 configured = true;
                                 event(
                                     json!({"phase":"waiting_video","message":"Accessory configured; requesting live video"}),
@@ -234,7 +239,7 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
     }
 }
 
-pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs) {
+pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs, aoa: Vec<String>) {
     let output = Arc::new(Mutex::new(output));
     let tx = output.clone();
     let shared = Arc::new(session::Shared::default());
@@ -244,7 +249,8 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs) {
         mode: args.goggles.clone(),
         g3_port: args.control_port,
         sync_time: args.sync_time,
-        memory: session::memory_path(&args.video_socket),
+        memory: Some(args.goggles_memory.clone()),
+        aoa,
     };
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(300));

@@ -1,4 +1,4 @@
-use super::{Lock, Paths, Phase, package};
+use super::{Lock, Paths, Phase, package, releases};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -26,7 +26,8 @@ struct Journal {
 pub trait Host {
     fn service(&self, verb: &str) -> Result<()>;
     fn migrate(&self, binary: &Path, data: &Path, output: &Path) -> Result<Vec<String>>;
-    fn healthy(&self, version: &str, build: &str) -> bool;
+    /// `build` is `None` for the factory release, which reports no build ID.
+    fn healthy(&self, version: &str, build: Option<&str>) -> bool;
 }
 struct System;
 impl Host for System {
@@ -56,7 +57,7 @@ impl Host for System {
         );
         serde_json::from_slice(&out.stdout).context("Invalid migration report")
     }
-    fn healthy(&self, version: &str, build: &str) -> bool {
+    fn healthy(&self, version: &str, build: Option<&str>) -> bool {
         let mut consecutive = 0;
         for _ in 0..40 {
             let valid = Command::new("curl")
@@ -67,7 +68,7 @@ impl Host for System {
                 .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
                 .is_some_and(|s| {
                     s["version"] == version
-                        && s["build_id"] == build
+                        && s["build_id"] == serde_json::json!(build)
                         && s["uptime_seconds"].as_u64().unwrap_or(0) >= 3
                 });
             if valid {
@@ -95,7 +96,15 @@ fn lock_wait(paths: &Paths) -> Result<Lock> {
 pub fn install(id: &str) -> Result<()> {
     let paths = Paths::default();
     let _lock = lock_wait(&paths)?;
-    let result = apply(&paths, id, package::architecture(), &System);
+    transact(&paths, id, package::architecture(), &System)
+}
+/// Run one install or rollback job and record its outcome in the history.
+fn transact(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
+    let from = releases::current_name(paths);
+    let rollback = paths
+        .job(id)
+        .is_ok_and(|j| j.join("rollback.json").exists());
+    let result = apply(paths, id, arch, host);
     if let Err(e) = &result {
         let mut state = paths.state()?;
         if state.phase != Phase::RolledBack {
@@ -103,6 +112,24 @@ pub fn install(id: &str) -> Result<()> {
             state.message = format!("{e:#}");
             paths.save(&state)?;
         }
+    }
+    let state = paths.state().unwrap_or_default();
+    let outcome = releases::Entry {
+        action: if rollback { "rollback" } else { "install" }.into(),
+        from,
+        to: state.build_id.clone(),
+        version: state.version.clone(),
+        result: match state.phase {
+            Phase::Succeeded => "succeeded",
+            Phase::RolledBack => "rolled_back",
+            _ => "failed",
+        }
+        .into(),
+        message: state.message.clone(),
+        ..Default::default()
+    };
+    if let Err(e) = releases::record(paths, outcome) {
+        eprintln!("Cannot write update history: {e:#}");
     }
     result
 }
@@ -157,6 +184,17 @@ fn setup_recovery(paths: &Paths) -> Result<()> {
     }
     Ok(())
 }
+/// What a transaction switches to: a freshly unpacked or an installed release.
+struct Candidate {
+    dir: PathBuf,
+    version: String,
+    build: Option<String>,
+    /// Service unit and preparation script to install; `None` keeps the
+    /// current ones (the factory release does not store copies).
+    service: Option<PathBuf>,
+    prepare: Option<PathBuf>,
+    done: String,
+}
 fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
     let mut state = paths.state()?;
     ensure!(
@@ -164,9 +202,35 @@ fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
         "No matching prepared update"
     );
     let job = paths.job(id)?;
+    if let Ok(bytes) = fs::read(job.join("rollback.json")) {
+        let request: releases::Rollback = serde_json::from_slice(&bytes)?;
+        let release = releases::rollback_target(paths, &request.release)?;
+        let previous = fs::read_link(paths.at(CURRENT)).ok();
+        state.phase = Phase::Installing;
+        state.message = format!("Switching back to {}", release.version);
+        paths.save(&state)?;
+        return switch(
+            paths,
+            &mut state,
+            &job,
+            Candidate {
+                done: format!("Switched back to {} ({})", release.version, release.name),
+                dir: release.dir,
+                version: release.version,
+                build: release.build,
+                service: release.service,
+                prepare: release.prepare,
+            },
+            previous,
+            host,
+        );
+    }
     let source = job.join("package");
     let manifest = package::validate(&source, arch)?;
     let build = manifest.release_id()?;
+    // The history records what was installed, whatever the upload state held.
+    state.version = Some(manifest.version.clone());
+    state.build_id = Some(build.clone());
     let target = paths.at(&format!("opt/dji-hdmi/releases/{build}"));
     let previous = fs::read_link(paths.at(CURRENT)).ok();
     ensure!(
@@ -195,6 +259,46 @@ fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
         &target.join("manifest.json"),
         0o644,
     )?;
+    // Keep this release's service files, so a later rollback can restore them.
+    atomic_copy(
+        &source.join("dji-hdmi.service"),
+        &target.join("dji-hdmi.service"),
+        0o644,
+    )?;
+    atomic_copy(
+        &source.join("prepare-pi.sh"),
+        &target.join("prepare-pi.sh"),
+        0o755,
+    )?;
+    switch(
+        paths,
+        &mut state,
+        &job,
+        Candidate {
+            service: Some(target.join("dji-hdmi.service")),
+            prepare: Some(target.join("prepare-pi.sh")),
+            dir: target,
+            done: format!("Updated to {}", manifest.version),
+            version: manifest.version,
+            build: Some(build),
+        },
+        previous,
+        host,
+    )?;
+    let _ = fs::remove_dir_all(source);
+    Ok(())
+}
+/// Stop, snapshot, migrate settings, activate `next`, restart and verify.
+/// Restores the previous release, settings and service files on failure.
+fn switch(
+    paths: &Paths,
+    state: &mut super::State,
+    job: &Path,
+    next: Candidate,
+    previous: Option<PathBuf>,
+    host: &impl Host,
+) -> Result<()> {
+    let target = next.dir.clone();
     setup_recovery(paths)?;
     let backup = job.join("backup");
     fs::create_dir_all(&backup)?;
@@ -237,8 +341,12 @@ fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
             &migrated,
         )?;
         atomic_copy(&migrated, &paths.at(FILES[2]), 0o600)?;
-        atomic_copy(&source.join("dji-hdmi.service"), &paths.at(FILES[0]), 0o644)?;
-        atomic_copy(&source.join("prepare-pi.sh"), &paths.at(FILES[1]), 0o755)?;
+        if let Some(service) = &next.service {
+            atomic_copy(service, &paths.at(FILES[0]), 0o644)?;
+        }
+        if let Some(prepare) = &next.prepare {
+            atomic_copy(prepare, &paths.at(FILES[1]), 0o755)?;
+        }
         if !paths.at("etc/default/dji-hdmi").exists() {
             fs::create_dir_all(paths.at("etc/default"))?;
             crate::settings::atomic_write(
@@ -249,12 +357,12 @@ fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
         set_current(paths, &target)?;
         state.phase = Phase::Restarting;
         state.message = "Restarting and checking the new release".into();
-        paths.save(&state)?;
+        paths.save(state)?;
         host.service("daemon-reload")?;
         host.service("enable")?;
         host.service("start")?;
         ensure!(
-            host.healthy(&manifest.version, &build),
+            host.healthy(&next.version, next.build.as_deref()),
             "New release did not pass its health check"
         );
         // Only a healthy application becomes the recovery helper for the next update.
@@ -264,42 +372,23 @@ fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
             0o755,
         )?;
         state.phase = Phase::Succeeded;
-        state.message = format!("Updated to {}", manifest.version);
-        paths.save(&state)?;
+        state.message = next.done.clone();
+        paths.save(state)?;
         Ok(())
     })();
     if let Err(error) = attempt {
-        if let Err(rollback) = restore(paths, &job, host, false) {
+        if let Err(rollback) = restore(paths, job, host, false) {
             bail!("Update failed: {error:#}. Automatic rollback failed: {rollback:#}");
         }
         state.phase = Phase::RolledBack;
-        state.message = format!("Update failed; previous version and settings restored: {error:#}");
-        paths.save(&state)?;
+        state.message = format!("Change failed; previous version and settings restored: {error:#}");
+        paths.save(state)?;
         return Err(error);
     }
     // The success record is the commit point. Cleanup cannot roll it back.
     let _ = remove_file(&job.join("journal.json"));
-    // Keep the active and preceding releases; bounded storage matters on small cards.
-    for entry in fs::read_dir(paths.at("opt/dji-hdmi/releases"))
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let managed = name.rsplit_once('-').is_some_and(|(version, hash)| {
-            semver::Version::parse(version).is_ok()
-                && hash.len() == 12
-                && hash.bytes().all(|b| b.is_ascii_hexdigit())
-        });
-        if managed
-            && entry.file_type().is_ok_and(|t| t.is_dir())
-            && entry.path() != target
-            && Some(entry.path()) != previous
-        {
-            let _ = fs::remove_dir_all(entry.path());
-        }
-    }
-    let _ = fs::remove_dir_all(source);
+    // Bounded storage matters on small cards; see `releases::prune`.
+    releases::prune(paths, &target, previous.as_deref());
     Ok(())
 }
 fn restore(paths: &Paths, job: &Path, host: &impl Host, boot: bool) -> Result<()> {
@@ -358,6 +447,17 @@ fn recover_with(paths: &Paths, host: &impl Host) -> Result<()> {
         state.message =
             "Interrupted update recovered; previous version and settings restored".into();
         paths.save(&state)?;
+        let _ = releases::record(
+            paths,
+            releases::Entry {
+                action: "recovery".into(),
+                to: releases::current_name(paths),
+                version: state.version.clone(),
+                result: "rolled_back".into(),
+                message: state.message.clone(),
+                ..Default::default()
+            },
+        );
     } else if state.phase.busy() {
         state.phase = Phase::Failed;
         state.message =
@@ -378,6 +478,16 @@ mod tests {
     struct FakeHost {
         healthy: bool,
         calls: RefCell<Vec<String>>,
+        checked: RefCell<Vec<(String, Option<String>)>>,
+    }
+    impl FakeHost {
+        fn new(healthy: bool) -> Self {
+            Self {
+                healthy,
+                calls: Default::default(),
+                checked: Default::default(),
+            }
+        }
     }
     impl Host for FakeHost {
         fn service(&self, verb: &str) -> Result<()> {
@@ -387,7 +497,10 @@ mod tests {
         fn migrate(&self, _: &Path, data: &Path, output: &Path) -> Result<Vec<String>> {
             crate::settings::migrate(data, output)
         }
-        fn healthy(&self, _: &str, _: &str) -> bool {
+        fn healthy(&self, version: &str, build: Option<&str>) -> bool {
+            self.checked
+                .borrow_mut()
+                .push((version.into(), build.map(Into::into)));
             self.healthy
         }
     }
@@ -425,10 +538,7 @@ mod tests {
     #[test]
     fn commits_healthy_release_and_preserves_configuration() {
         let (_f, paths, old) = setup();
-        let host = FakeHost {
-            healthy: true,
-            calls: Default::default(),
-        };
+        let host = FakeHost::new(true);
         apply(&paths, "123", "aarch64", &host).unwrap();
         assert_ne!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
         assert!(old.exists());
@@ -456,10 +566,7 @@ mod tests {
     fn failed_health_check_restores_previous_release_and_exact_settings() {
         let (_f, paths, old) = setup();
         let before = fs::read(paths.at(FILES[2])).unwrap();
-        let host = FakeHost {
-            healthy: false,
-            calls: Default::default(),
-        };
+        let host = FakeHost::new(false);
         assert!(apply(&paths, "123", "aarch64", &host).is_err());
         assert_eq!(paths.state().unwrap().phase, Phase::RolledBack);
         assert_eq!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
@@ -472,10 +579,7 @@ mod tests {
     fn corrupt_settings_abort_and_restore() {
         let (_f, paths, old) = setup();
         fs::write(paths.at(FILES[2]), "invalid JSON").unwrap();
-        let host = FakeHost {
-            healthy: true,
-            calls: Default::default(),
-        };
+        let host = FakeHost::new(true);
         assert!(apply(&paths, "123", "aarch64", &host).is_err());
         assert_eq!(paths.state().unwrap().phase, Phase::RolledBack);
         assert_eq!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
@@ -508,14 +612,14 @@ mod tests {
         let mut state = paths.state().unwrap();
         state.phase = Phase::Restarting;
         paths.save(&state).unwrap();
-        let host = FakeHost {
-            healthy: true,
-            calls: Default::default(),
-        };
+        let host = FakeHost::new(true);
         recover_with(&paths, &host).unwrap();
         assert_eq!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
         assert_eq!(paths.state().unwrap().phase, Phase::RolledBack);
         assert_eq!(*host.calls.borrow(), vec!["daemon-reload"]);
+        let history = releases::history(&paths);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].action, "recovery");
         assert!(!job.join("journal.json").exists());
     }
     #[test]
@@ -526,14 +630,202 @@ mod tests {
         let mut state = paths.state().unwrap();
         state.phase = Phase::Succeeded;
         paths.save(&state).unwrap();
-        let host = FakeHost {
-            healthy: true,
-            calls: Default::default(),
-        };
+        let host = FakeHost::new(true);
         recover_with(&paths, &host).unwrap();
         assert_eq!(paths.state().unwrap().phase, Phase::Succeeded);
         assert_eq!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
         assert!(host.calls.borrow().is_empty());
         assert!(!job.join("journal.json").exists());
+    }
+
+    const FACTORY: &str = "0.3.1-0123456789ab";
+    /// The SD-card image release: binary and VERSION, no manifest or service copies.
+    fn with_factory_release() -> (Fixture, Paths, PathBuf) {
+        let (f, paths, _) = setup();
+        let factory = paths.at(releases::DIRECTORY).join(FACTORY);
+        fs::create_dir_all(factory.join("bin")).unwrap();
+        fs::write(factory.join("bin/ungoggled"), "factory binary").unwrap();
+        fs::write(factory.join("VERSION"), format!("{FACTORY}\n")).unwrap();
+        set_current(&paths, &factory).unwrap();
+        (f, paths, factory)
+    }
+    fn queue_rollback(paths: &Paths, id: &str, release: &str) {
+        let job = paths.job(id).unwrap();
+        fs::create_dir_all(&job).unwrap();
+        fs::write(
+            job.join("rollback.json"),
+            serde_json::to_vec(&releases::Rollback {
+                release: release.into(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        paths
+            .save(&State {
+                id: Some(id.into()),
+                phase: Phase::Queued,
+                build_id: Some(release.into()),
+                ..State::default()
+            })
+            .unwrap();
+    }
+    fn current(paths: &Paths) -> String {
+        releases::current_name(paths).unwrap()
+    }
+    #[test]
+    fn switch_back_and_forth_between_releases_with_history() {
+        let (_f, paths, factory) = with_factory_release();
+        let host = FakeHost::new(true);
+        transact(&paths, "123", "aarch64", &host).unwrap();
+        let updated = current(&paths);
+        assert_ne!(updated, FACTORY);
+        let release = paths.at(releases::DIRECTORY).join(&updated);
+        // Each web-installed release keeps its own service files.
+        assert_eq!(
+            fs::read_to_string(release.join("dji-hdmi.service")).unwrap(),
+            "new dji-hdmi.service"
+        );
+        let listed = releases::list(&paths);
+        assert_eq!(listed.len(), 2);
+        assert!(
+            listed
+                .iter()
+                .any(|r| r.factory && r.name == FACTORY && !r.current)
+        );
+        assert!(listed.iter().any(|r| r.current && r.name == updated));
+
+        // Back to the factory release: its binary migrates the settings and the
+        // health check expects no build ID.
+        queue_rollback(&paths, "124", FACTORY);
+        transact(&paths, "124", "aarch64", &host).unwrap();
+        assert_eq!(current(&paths), FACTORY);
+        assert_eq!(
+            fs::canonicalize(paths.at(CURRENT)).unwrap(),
+            fs::canonicalize(&factory).unwrap()
+        );
+        // The health check expects the factory release's own (older) version.
+        assert_eq!(
+            host.checked.borrow().last().unwrap(),
+            &("0.3.1".to_owned(), None)
+        );
+        assert_eq!(paths.state().unwrap().phase, Phase::Succeeded);
+        assert!(release.exists(), "the newer release stays available");
+
+        // Forward again to the newer release, restoring its service files.
+        fs::write(paths.at(FILES[0]), "changed meanwhile").unwrap();
+        queue_rollback(&paths, "125", &updated);
+        transact(&paths, "125", "aarch64", &host).unwrap();
+        assert_eq!(current(&paths), updated);
+        assert_eq!(
+            fs::read_to_string(paths.at(FILES[0])).unwrap(),
+            "new dji-hdmi.service"
+        );
+        assert_eq!(
+            host.checked.borrow().last().unwrap().1.as_deref(),
+            Some(updated.as_str())
+        );
+
+        let history = releases::history(&paths);
+        let summary: Vec<_> = history
+            .iter()
+            .map(|e| (e.action.as_str(), e.result.as_str(), e.to.as_deref()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("install", "succeeded", Some(updated.as_str())),
+                ("rollback", "succeeded", Some(FACTORY)),
+                ("rollback", "succeeded", Some(updated.as_str())),
+            ]
+        );
+        assert_eq!(history[1].from.as_deref(), Some(updated.as_str()));
+        assert!(history.iter().all(|e| e.time > 0));
+    }
+    #[test]
+    fn failed_switch_back_keeps_current_release_and_settings() {
+        let (_f, paths, _) = with_factory_release();
+        transact(&paths, "123", "aarch64", &FakeHost::new(true)).unwrap();
+        let updated = current(&paths);
+        let settings = fs::read(paths.at(FILES[2])).unwrap();
+        queue_rollback(&paths, "124", FACTORY);
+        assert!(transact(&paths, "124", "aarch64", &FakeHost::new(false)).is_err());
+        assert_eq!(current(&paths), updated);
+        assert_eq!(fs::read(paths.at(FILES[2])).unwrap(), settings);
+        assert_eq!(paths.state().unwrap().phase, Phase::RolledBack);
+        let last = releases::history(&paths).pop().unwrap();
+        assert_eq!(
+            (last.action.as_str(), last.result.as_str()),
+            ("rollback", "rolled_back")
+        );
+    }
+    #[test]
+    fn switch_back_rejects_active_unknown_and_unsafe_names() {
+        let (_f, paths, _) = with_factory_release();
+        for name in [FACTORY, "0.3.0-ffffffffffff", "../etc", "old"] {
+            assert!(releases::rollback_target(&paths, name).is_err(), "{name}");
+            queue_rollback(&paths, "124", name);
+            assert!(transact(&paths, "124", "aarch64", &FakeHost::new(true)).is_err());
+            assert_eq!(current(&paths), FACTORY);
+        }
+        assert!(
+            releases::history(&paths)
+                .iter()
+                .all(|e| e.result == "failed")
+        );
+    }
+    #[test]
+    fn pruning_keeps_factory_active_previous_and_one_more() {
+        let (_f, paths, _) = with_factory_release();
+        let dir = paths.at(releases::DIRECTORY);
+        let names: Vec<String> = (0..5).map(|i| format!("0.4.{i}-00000000000{i}")).collect();
+        for name in &names {
+            fs::create_dir_all(dir.join(name).join("bin")).unwrap();
+            fs::write(dir.join(name).join("bin/ungoggled"), "x").unwrap();
+            fs::write(dir.join(name).join("VERSION"), name).unwrap();
+            // Distinct creation times; newest is names[4].
+            thread::sleep(Duration::from_millis(20));
+        }
+        // Only the factory release lacks manifest.json; give the others one.
+        for name in &names {
+            fs::write(
+                dir.join(name).join("manifest.json"),
+                serde_json::to_vec(&crate::update::tests::bundle(&paths.at("scratch"))).unwrap(),
+            )
+            .unwrap();
+        }
+        releases::prune(&paths, &dir.join(&names[4]), Some(&dir.join(&names[1])));
+        let mut left: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        // Directories outside the VERSION-HASH scheme are never touched.
+        let mut want = vec![
+            "old".to_owned(),
+            FACTORY.to_owned(),
+            names[1].clone(),
+            names[3].clone(),
+            names[4].clone(),
+        ];
+        want.sort();
+        assert_eq!(left, want);
+    }
+    #[test]
+    fn history_is_bounded() {
+        let (_f, paths, _) = setup();
+        for i in 0..60 {
+            releases::record(
+                &paths,
+                releases::Entry {
+                    action: "install".into(),
+                    message: i.to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        let h = releases::history(&paths);
+        assert_eq!(h.len(), 50);
+        assert_eq!(h[0].message, "10");
     }
 }

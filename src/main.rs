@@ -120,6 +120,9 @@ pub struct WorkerArgs {
     /// to the other when no video arrives; `goggles3` or `goggles2` force one.
     #[arg(long,default_value="auto",value_parser=["auto","goggles3","goggles2"],env="UNGOGGLED_GOGGLES")]
     goggles: String,
+    /// Which protocol worked for which goggles (by their AOA strings).
+    #[arg(long, default_value = "/var/lib/dji-hdmi/goggles-protocol.json")]
+    goggles_memory: PathBuf,
     #[arg(long, hide = true)]
     cold_accessory: bool,
     /// After USB registration, send DUML clock commands from the Pi wall clock.
@@ -375,6 +378,7 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                 "--goggles",
                 &args.goggles,
             ]);
+            cmd.arg("--goggles-memory").arg(&args.goggles_memory);
             cmd.arg("--video-socket").arg(&args.video_socket);
             if let Some(c) = &args.controller {
                 cmd.args(["--controller", c]);

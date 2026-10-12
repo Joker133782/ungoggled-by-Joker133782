@@ -1,6 +1,7 @@
 pub mod api;
 mod install;
 pub mod package;
+pub mod releases;
 use anyhow::{Result, bail, ensure};
 pub use install::{install, recover};
 use serde::{Deserialize, Serialize};
@@ -248,6 +249,34 @@ pub fn launch(paths: &Paths, id: &str) -> Result<()> {
             bail!("{}", state.message)
         }
     }
+}
+/// Queue a switch back to an installed release, through the same transaction
+/// as an update (snapshot, migration, health check, automatic restore).
+pub fn request_rollback(paths: &Paths, release: &str) -> Result<String> {
+    ensure!(supported(), "Web updates require an installed Pi service");
+    let target = releases::rollback_target(paths, release)?;
+    let (id, job) = new_job(paths)?;
+    crate::settings::atomic_write(
+        &job.join("rollback.json"),
+        &serde_json::to_vec(&releases::Rollback {
+            release: target.name.clone(),
+        })?,
+    )?;
+    paths.save(&State {
+        id: Some(id.clone()),
+        phase: Phase::Ready,
+        version: Some(target.version.clone()),
+        message: format!("Switching back to {}", target.version),
+        build_id: Some(target.name.clone()),
+        ..State::default()
+    })?;
+    launch(paths, &id)?;
+    Ok(id)
+}
+pub fn releases_information(paths: &Paths) -> Value {
+    let mut history = releases::history(paths);
+    history.reverse();
+    json!({"releases":releases::list(paths),"history":history})
 }
 pub fn manual(source: &Path) -> Result<()> {
     ensure!(unsafe { libc::geteuid() } == 0, "Run the installer as root");

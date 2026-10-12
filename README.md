@@ -36,10 +36,13 @@ separately.
 Goggles 2 need a different start sequence than Goggles 3: DJI Fly's arming
 requests and keepalives on control port `0x7530`, taken from the MIT-licensed
 [dji-o3-usb-decoder](https://github.com/dr00min/o3-usb-decoder) capture. The
-receiver tries the protocol that worked last, switches to the other one after
-10–15 s without video, keeps the one that produced video and shows it under
-**Diagnostics → Goggles protocol**. Only the Goggles 3 path is hardware-verified
-in this project.
+receiver remembers which protocol produced video for each pair of goggles,
+identified by the AOA strings they send while connecting
+(`/var/lib/dji-hdmi/goggles-protocol.json`). Known goggles start with their
+protocol; unknown goggles, or identifications seen with both generations, start
+with the quick Goggles 3 probe and switch after 8 s without video (Goggles 2
+after 12 s). The active protocol is shown under **Diagnostics → Goggles
+protocol**. Only the Goggles 3 path is hardware-verified in this project.
 
 To force a protocol or the accessory PID, add to `/etc/default/dji-hdmi` and
 restart `dji-hdmi`:
@@ -171,6 +174,18 @@ Click it for release notes and a download link. This uses your browser's Interne
 connection; the Pi itself can stay offline. Uploads work without Internet access.
 Application updates do not replace Raspberry Pi OS, its kernel or media packages.
 Downgrades are not supported.
+
+### Switching back to an earlier version
+
+**Installed versions** lists the releases kept on the card: the active one, the
+one before it, one older update and the release from the SD-card image. Choose
+**Switch to this version** to activate one. This runs the same transaction as an
+update: settings, service files and the recovery journal are saved first, the
+release's own settings migration runs, and the previous state returns
+automatically if the release fails its health check or power is lost. The
+**Update history** records every update, switch and boot recovery. Releases older
+than 0.3.2 do not show this list; to return to a newer one from them, upload its
+update file again.
 
 ### Upgrading an installation older than 0.3.0
 

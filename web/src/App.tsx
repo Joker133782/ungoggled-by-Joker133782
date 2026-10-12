@@ -3,6 +3,7 @@ import type { Status, Settings, ImageEntry, History } from "./types";
 import { api, headers, usePolling } from "./api";
 import { modeLabel, number, scan, size, skewLabel } from "./format";
 import { Preview } from "./components/Preview";
+import { Versions } from "./components/Versions";
 import { Timeline } from "./components/Timeline";
 import { SoftwareUpdate } from "./components/SoftwareUpdate";
 import { useReleases } from "./releases";
@@ -588,6 +589,7 @@ export default function App() {
         setShowRelease={setShowRelease}
         onBusy={setUpdateBusy}
       />
+      <Versions disabled={updateBusy} />
       <details className="panel diagnostics">
         <summary>Diagnostics</summary>
         <dl>

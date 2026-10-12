@@ -47,7 +47,20 @@ Only upload trusted release packages.
 an uncommitted transaction. It never starts the receiver synchronously during
 boot, avoiding an ordering deadlock. The image and installers enable both units;
 the receiver must not acquire a new `Wants=` dependency on recovery when restarted
-mid-update. The active and preceding application releases are retained.
+mid-update. Retained releases: the active and preceding ones, the newest other
+web-installed release and the factory release from the SD-card image (it has
+`VERSION` but no `manifest.json`). Directories outside the `VERSION-HASH` scheme
+are never touched. Web-installed releases keep copies of their
+`dji-hdmi.service` and `prepare-pi.sh` for later switches.
+
+## Switching back and history
+
+A switch to an installed release is a job containing `rollback.json` instead of
+a package. `update-worker` runs it through the same stop, snapshot, journal,
+migration, health check and restore steps; the target's executable migrates the
+settings. The factory release reports no build ID, so its health check expects
+`build_id: null`. Releases without stored service files keep the current ones.
+Each install, switch and boot recovery appends to `history.json` (last 50).
 
 Wi-Fi profiles, login credentials, uploaded images, OS packages, boot configuration
 and `/etc/default/dji-hdmi` are outside the application migration. Rootless local
@@ -59,6 +72,8 @@ ARCHIVE --architecture aarch64` also verifies the actual built archive on a PC.
 - `GET /api/update`: current version/build, support status and durable progress.
 - `POST /api/update/upload`: one multipart file; returns the validated candidate.
 - `POST /api/update/install`: JSON `{ "id": "..." }`; queues that candidate.
+- `GET /api/update/releases`: installed releases and the history, newest first.
+- `POST /api/update/rollback`: JSON `{ "release": "VERSION-HASH" }`; queues a switch.
 
 Mutating endpoints require the existing `X-DJI-Control: 1` header. Settings and
 Wi-Fi changes are blocked during installation. Uploading alone does not interrupt

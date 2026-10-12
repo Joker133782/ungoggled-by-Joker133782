@@ -184,6 +184,7 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
     let events = Arc::new(AtomicU64::new(0));
     recover_silent_host(config.to_path_buf(), controller.clone(), events.clone());
     let mut accessory = args.cold_accessory;
+    let mut aoa = vec![String::new(); 6];
     let mut transitioning = false;
     let mut started = false;
     loop {
@@ -200,7 +201,7 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
                 );
                 if accessory && !started {
                     let (input, output) = endpoints.take().unwrap();
-                    gadget::start_bulk(input, output, args.clone());
+                    gadget::start_bulk(input, output, args.clone(), aoa.clone());
                     started = true;
                 }
                 transitioning = false;
@@ -222,10 +223,11 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
                     (0x40, 52) if len <= 256 && idx < 6 => {
                         let mut s = vec![0; len];
                         let n = io(&ep0, false, &mut s)?;
-                        eprintln!(
-                            "AOA string {idx}: {}",
-                            String::from_utf8_lossy(&s[..n]).trim_end_matches('\0')
-                        );
+                        let text = String::from_utf8_lossy(&s[..n])
+                            .trim_end_matches('\0')
+                            .to_owned();
+                        eprintln!("AOA string {idx}: {text}");
+                        aoa[idx as usize] = text;
                     }
                     (0x40, 53) if len == 0 => {
                         io(&ep0, false, &mut [])?;

@@ -31,6 +31,11 @@ pub fn routes() -> Router<App> {
             post(upload).layer(DefaultBodyLimit::max(super::package::MAX_UPLOAD + 65536)),
         )
         .route("/api/update/install", post(install))
+        .route(
+            "/api/update/releases",
+            get(|| async { Json(super::releases_information(&Paths::default())) }),
+        )
+        .route("/api/update/rollback", post(rollback))
 }
 pub fn ensure_idle() -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -126,6 +131,33 @@ async fn install(
     .map_err(bad)?
     .map_err(bad)?;
     Ok(Json(json!({"accepted":true})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Rollback {
+    release: String,
+}
+async fn rollback(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Json(request): Json<Rollback>,
+) -> Response {
+    guard(&headers)?;
+    let id = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        let _operations = app.operations.lock().unwrap();
+        anyhow::ensure!(
+            !app.wifi_busy.load(Ordering::Relaxed),
+            "Wait for the Wi-Fi change to finish"
+        );
+        let paths = Paths::default();
+        let _lock = Lock::acquire(&paths)?;
+        super::request_rollback(&paths, &request.release)
+    })
+    .await
+    .map_err(bad)?
+    .map_err(bad)?;
+    Ok(Json(json!({"accepted":true,"id":id})))
 }
 
 #[cfg(test)]
