@@ -33,6 +33,8 @@ export type Status = {
   timezone?: string;
   time_synced?: boolean;
   fallback_video?: boolean;
+  goggles_protocol?: "goggles3" | "goggles2";
+  goggles_protocol_state?: "probing" | "video" | "forced";
 };
 export type Settings = {
   hdmi_mode: string;

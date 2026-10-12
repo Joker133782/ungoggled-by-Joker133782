@@ -104,7 +104,8 @@ impl Loop {
             return false;
         }
         let beat = *p.heartbeat.lock().unwrap();
-        let grace = self.started.elapsed() < Duration::from_secs(5);
+        // The first pipeline after boot loads its plugins from a cold SD card.
+        let grace = self.started.elapsed() < Duration::from_secs(10);
         grace || beat.is_some_and(|t| t.elapsed() < Duration::from_secs(3))
     }
 }

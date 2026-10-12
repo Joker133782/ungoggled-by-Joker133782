@@ -20,6 +20,21 @@ const phases: Record<string, string> = {
   aoa_negotiation: "Connecting goggles",
   usb_connected: "Goggles connected",
 };
+const protocols: Record<string, string> = {
+  goggles3: "Goggles 3",
+  goggles2: "Goggles 2",
+};
+const protocolStates: Record<string, string> = {
+  probing: "trying",
+  video: "detected",
+  forced: "fixed",
+};
+function protocolLabel(status: Status | null): string {
+  const id = status?.goggles_protocol;
+  if (!id) return "";
+  const state = status?.goggles_protocol_state;
+  return `${protocols[id] ?? id}${state ? ` (${protocolStates[state] ?? state})` : ""}`;
+}
 // Phases the gadget only reaches once the accessory handshake has succeeded.
 const usbPhases = [
   "usb_connected",
@@ -192,7 +207,7 @@ export default function App() {
                       handshakeDone
                         ? (phases[status.phase] ?? status.phase)
                         : "accessory handshake not started"
-                    }`
+                    }${protocolLabel(status) ? ` · ${protocolLabel(status)}` : ""}`
                   : "Nothing powering the accessory port"
                 : "Receiver unreachable"
             }
@@ -578,6 +593,8 @@ export default function App() {
         <dl>
           <dt>Receiver</dt>
           <dd>{status?.phase ?? "—"}</dd>
+          <dt>Goggles protocol</dt>
+          <dd>{protocolLabel(status) || "—"}</dd>
           <dt>HDMI</dt>
           <dd>{status?.hdmi ?? "—"}</dd>
           <dt>Received</dt>

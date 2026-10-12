@@ -1,4 +1,4 @@
-use crate::{WorkerArgs, protocol, video};
+use crate::{WorkerArgs, protocol, session, video};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use std::{
@@ -6,10 +6,7 @@ use std::{
     io::{Read, Write},
     os::fd::AsRawFd,
     path::Path,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, atomic::Ordering},
     thread,
     time::{Duration, Instant},
 };
@@ -240,35 +237,35 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
 pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs) {
     let output = Arc::new(Mutex::new(output));
     let tx = output.clone();
-    let video_bytes = Arc::new(AtomicU64::new(0));
-    let count = video_bytes.clone();
+    let shared = Arc::new(session::Shared::default());
+    let driver_state = shared.clone();
+    let status_state = shared.clone();
+    let config = session::Config {
+        mode: args.goggles.clone(),
+        g3_port: args.control_port,
+        sync_time: args.sync_time,
+        memory: session::memory_path(&args.video_socket),
+    };
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(300));
-        let mut seq = 0x100;
-        loop {
-            for packet in protocol::registration(&mut seq, args.control_port) {
-                if let Err(e) = write_bulk(&mut *tx.lock().unwrap(), &packet) {
-                    eprintln!("USB TX: {e}");
-                    std::process::exit(1);
-                }
-            }
-            if args.sync_time
-                && let Some(clock) = crate::clock::now()
-            {
-                let packet = protocol::time_sync(&mut seq, args.control_port, &clock);
-                if let Err(e) = write_bulk(&mut *tx.lock().unwrap(), &packet) {
-                    eprintln!("USB TX: {e}");
-                    std::process::exit(1);
-                }
-            }
-            thread::sleep(Duration::from_secs(3));
+        let mut send = |packet: &[u8]| write_bulk(&mut *tx.lock().unwrap(), packet);
+        let result = session::drive(
+            &config,
+            &driver_state,
+            &session::Timing::default(),
+            &mut send,
+            &event,
+        );
+        if let Err(e) = result {
+            eprintln!("USB TX: {e}");
+            std::process::exit(1);
         }
     });
     thread::spawn(move || {
         let mut last = 0;
         loop {
             thread::sleep(Duration::from_secs(1));
-            let now = count.load(Ordering::Relaxed);
+            let now = status_state.video.load(Ordering::Relaxed);
             event(
                 json!({"video_bytes":now,"bitrate_mbps":(now-last) as f64 * 8.0 / 1_000_000.0,"phase":if now > last {"streaming"} else {"waiting_video"}}),
             );
@@ -299,7 +296,9 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs) {
                 }
                 for (port, payload) in framer.feed(&buffer[..n]) {
                     if port == protocol::VIDEO {
-                        video_bytes.fetch_add(payload.len() as u64, Ordering::Relaxed);
+                        shared
+                            .video
+                            .fetch_add(payload.len() as u64, Ordering::Relaxed);
                         if captured < args.capture_limit
                             && let Some(file) = capture.as_mut()
                         {
@@ -333,9 +332,12 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs) {
                                 );
                             }
                             if let Some(reply) = protocol::identity_reply(&payload) {
+                                // Goggles 2 expect replies on 0x7530; Goggles 3 on
+                                // the configured mobile control port.
+                                let port = shared.reply_port(args.control_port);
                                 write_bulk(
                                     &mut *output.lock().unwrap(),
-                                    &protocol::wrap(args.control_port, &reply),
+                                    &protocol::wrap(port, &reply),
                                 )?;
                             }
                         }

@@ -3,11 +3,14 @@ mod assets;
 mod clock;
 mod display;
 mod functionfs;
+mod g2;
+mod g2_sequence;
 mod gadget;
 mod h264;
 mod hardware;
 mod history;
 mod protocol;
+mod session;
 mod settings;
 mod update;
 mod video;
@@ -111,8 +114,12 @@ pub struct WorkerArgs {
     capture_limit: u64,
     #[arg(long, default_value_t = 22345)]
     control_port: u16,
-    #[arg(long,default_value_t=11520,value_parser=clap::value_parser!(u16).range(11520..=11521))]
+    #[arg(long,default_value_t=11520,value_parser=clap::value_parser!(u16).range(11520..=11521),env="UNGOGGLED_ACCESSORY_PID")]
     accessory_pid: u16,
+    /// Goggles protocol: `auto` tries the last working one first and falls back
+    /// to the other when no video arrives; `goggles3` or `goggles2` force one.
+    #[arg(long,default_value="auto",value_parser=["auto","goggles3","goggles2"],env="UNGOGGLED_GOGGLES")]
+    goggles: String,
     #[arg(long, hide = true)]
     cold_accessory: bool,
     /// After USB registration, send DUML clock commands from the Pi wall clock.
@@ -365,6 +372,8 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                 &args.control_port.to_string(),
                 "--accessory-pid",
                 &args.accessory_pid.to_string(),
+                "--goggles",
+                &args.goggles,
             ]);
             cmd.arg("--video-socket").arg(&args.video_socket);
             if let Some(c) = &args.controller {

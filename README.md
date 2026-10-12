@@ -1,7 +1,8 @@
 # ungoggled
 
-Turn a Raspberry Pi 4 into an HDMI receiver for **DJI Goggles 3**, with a local
-web interface for setup and monitoring.
+Turn a Raspberry Pi 4 into an HDMI receiver for **DJI Goggles 3** (and,
+experimentally, **DJI Goggles 2**), with a local web interface for setup and
+monitoring.
 
 Goggles 3 with both **O3 Air Unit** and **O4 Air Unit Pro** have been tested with
 live HDMI output. Use the Pi's USB-C port for the goggles and power the Pi
@@ -29,6 +30,24 @@ separately.
 - Three optional plain GPIO LEDs, one each for goggles, video and HDMI state.
 - An optional GPIO power button that shuts the Pi down when pressed.
 - Reboot and shut down the Pi from the web interface, with a confirmation step.
+
+## Goggles 2 (experimental)
+
+Goggles 2 need a different start sequence than Goggles 3: DJI Fly's arming
+requests and keepalives on control port `0x7530`, taken from the MIT-licensed
+[dji-o3-usb-decoder](https://github.com/dr00min/o3-usb-decoder) capture. The
+receiver tries the protocol that worked last, switches to the other one after
+10–15 s without video, keeps the one that produced video and shows it under
+**Diagnostics → Goggles protocol**. Only the Goggles 3 path is hardware-verified
+in this project.
+
+To force a protocol or the accessory PID, add to `/etc/default/dji-hdmi` and
+restart `dji-hdmi`:
+
+```
+UNGOGGLED_GOGGLES=goggles2        # auto (default), goggles3 or goggles2
+UNGOGGLED_ACCESSORY_PID=11521     # 0x2d01, the PID DJI Fly presents; default 11520 (0x2d00)
+```
 
 ## Hardware and wiring
 
