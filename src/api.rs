@@ -355,7 +355,9 @@ async fn seek_usb_video(
     }
     let socket = a.usb_mpv_socket.clone();
     tokio::task::spawn_blocking(move || {
-        crate::video::mpv_command(&socket, json!(["seek", c.position, "absolute+exact"]))
+        // mpv's IPC command array rejects a combined "absolute+exact" flag
+        // string; plain "absolute" is exact by default for absolute seeks.
+        crate::video::mpv_command(&socket, json!(["seek", c.position, "absolute"]))
     })
     .await
     .map_err(bad)?

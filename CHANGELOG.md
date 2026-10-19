@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6
+
+- Fix USB video seeking: mpv's IPC command array rejected the combined `absolute+exact` seek flag. Found by actually running the thumbnail GStreamer pipeline and the mpv IPC protocol for the first time, after getting sudo on the build host; both now verified to work as coded (except real DRM/KMS output, still unverified without a Pi and monitor).
+
 ## 0.3.5
 
 - USB videos: play/pause and seek from the web interface (video stays on the HDMI output only), switching the playback backend from GStreamer to mpv. Needs `mpv` on the Pi, now included in the SD-card image; an already-flashed Pi needs a re-flash or `apt install mpv`.
