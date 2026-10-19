@@ -77,13 +77,23 @@ Plug a USB drive or an action camera acting as USB mass storage into one of
 the Pi's regular USB-A ports (never the USB-C gadget port the goggles use).
 It is mounted read-only automatically; video files found on it (`.mp4`,
 `.mov`, `.mkv`, `.avi`, `.m4v`, `.insv`, `.lrv`) are listed in the web
-interface under **USB videos**. Playing one takes over the HDMI output from
-live goggles video and the fallback loop until it ends or **Stop** is
-pressed; unmounting the drive removes it from the list. Unlike the fallback
-video, there is no size limit and no re-encoding, but also no decoder
-forcing: playback uses whatever codec the file needs and whatever the Pi's
-GStreamer install can decode for it, so very high resolutions or HEVC clips
-may not play smoothly depending on hardware decoder availability. Not
+interface under **USB videos**, each with a cached thumbnail (a single
+extracted frame; the cache lives under the runtime directory, which is
+tmpfs, so it is gone again after any reboot or power loss, not left on the
+SD card). Playing one takes over the HDMI output from live goggles video and
+the fallback loop; play/pause and seeking are controlled from the web
+interface, but only the picture goes to the monitor, nothing streams back to
+the browser. Unlike the fallback video, there is no size limit and no
+re-encoding.
+
+This plays through **mpv**, not GStreamer, so it needs `mpv` installed on
+the Pi. It is included from this version onward in the SD-card image, but a
+Pi already running an older image needs either a fresh SD-card flash or
+`apt install mpv` over SSH before this feature works; without it the web
+interface reports that mpv is missing instead of failing silently. Playback
+otherwise uses whatever codec and resolution the file needs and whatever the
+Pi's mpv/ffmpeg install can decode for it, so very high resolutions or HEVC
+clips may not play smoothly without working hardware decode. Not
 hardware-verified.
 
 ## Hardware and wiring

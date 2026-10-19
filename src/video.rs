@@ -63,13 +63,16 @@ struct Chunk {
     received: Instant,
 }
 /// One-shot playback of a file from a USB mass-storage drive, as opposed to
-/// the live goggles decoder or the looping fallback video.
+/// the live goggles decoder or the looping fallback video. Unlike those
+/// gst-launch pipelines, this one is controllable at runtime (pause/seek)
+/// over mpv's JSON IPC socket, so the web interface can offer a scrub bar.
 struct UsbPlayer {
     child: Child,
 }
 impl UsbPlayer {
-    /// True once the pipeline has exited, whether from reaching the end of
-    /// the file or from an error; either way there is nothing left to show.
+    /// True once mpv has exited. With `--idle=yes` that only happens on a
+    /// real error or an explicit `quit` command, never just from reaching
+    /// the end of the file, so a finished clip still answers IPC queries.
     fn finished(&mut self) -> bool {
         self.child.try_wait().ok().flatten().is_some()
     }
@@ -82,50 +85,75 @@ impl Drop for UsbPlayer {
 }
 /// Quote a value for GStreamer's `gst_parse_launch` pipeline syntax, so a
 /// path containing spaces or syntax characters (`!`, `,`) is not misread.
-fn quote_gst(value: &str) -> String {
+pub(crate) fn quote_gst(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
+/// Fixed path for mpv's control socket while a USB video plays. Fixed rather
+/// than per-session because only one USB video ever plays at a time.
+pub fn usb_mpv_socket(video_socket: &Path) -> std::path::PathBuf {
+    video_socket.with_file_name("usb-mpv.sock")
+}
+/// Send one JSON IPC command to mpv and return its reply. `command` is the
+/// command array, e.g. `json!(["get_property", "time-pos"])`. See
+/// <https://github.com/mpv-player/mpv/blob/master/DOCS/man/ipc.rst>.
+pub fn mpv_command(socket: &Path, command: Value) -> anyhow::Result<Value> {
+    let mut stream = UnixStream::connect(socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    let mut request = serde_json::to_vec(&json!({"command": command}))?;
+    request.push(b'\n');
+    stream.write_all(&request)?;
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply)?;
+    Ok(serde_json::from_str(&reply)?)
+}
+/// The connector name mpv's `--drm-connector` wants (e.g. "HDMI-A-1") for
+/// the numeric KMS connector id `kmssink`'s `connector-id` uses elsewhere in
+/// this file; `None` leaves mpv to auto-pick the connected connector.
+fn drm_connector_name(id: u32) -> Option<String> {
+    std::fs::read_dir("/sys/class/drm")
+        .ok()?
+        .flatten()
+        .find_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let found: u32 = std::fs::read_to_string(e.path().join("connector_id"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()?;
+            (found == id).then(|| {
+                name.split_once('-')
+                    .map_or(name.clone(), |(_, rest)| rest.to_owned())
+            })
+        })
+}
 fn spawn_usb_player(args: &WorkerArgs, path: &Path) -> anyhow::Result<UsbPlayer> {
-    let mut sink = if args.output == "hdmi" {
-        "kmssink driver-name=vc4 sync=true".to_owned()
+    let socket = usb_mpv_socket(&args.video_socket);
+    let _ = std::fs::remove_file(&socket);
+    let mut cmd = Command::new("mpv");
+    cmd.args(["--no-terminal", "--idle=yes", "--hwdec=auto"]);
+    cmd.arg(format!("--input-ipc-server={}", socket.display()));
+    if args.output == "hdmi" {
+        cmd.arg("--vo=drm");
+        if let Some(id) = args.connector
+            && let Some(name) = drm_connector_name(id)
+        {
+            cmd.arg(format!("--drm-connector={name}"));
+        }
     } else {
-        "fakesink sync=true".to_owned()
-    };
-    if args.output == "hdmi"
-        && let Some(id) = args.connector
-    {
-        sink += &format!(" connector-id={id}");
+        cmd.arg("--vo=null");
     }
-    let location = format!("location={}", quote_gst(&path.to_string_lossy()));
-    let mut cmd = Command::new("gst-launch-1.0");
-    cmd.args([
-        "-v",
-        "filesrc",
-        &location,
-        "!",
-        "decodebin",
-        "!",
-        "queue",
-        "!",
-        "videoconvert",
-        "!",
-        "videoscale",
-        "!",
-    ]);
-    cmd.args(sink.split_whitespace());
-    let mut child = cmd
+    cmd.arg(path);
+    let child = cmd
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .stderr(Stdio::inherit())
-        .spawn()?;
-    // -v makes gst-launch chatty on stdout; drain it so a full pipe never
-    // blocks the pipeline.
-    let bus = child.stdout.take().unwrap();
-    thread::spawn(
-        move || {
-            for _ in BufReader::new(bus).lines().map_while(Result::ok) {}
-        },
-    );
+        .spawn()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Cannot start mpv ({e}). Is it installed? `apt install mpv`, or re-flash \
+                 the SD card with an image that includes it."
+            )
+        })?;
     Ok(UsbPlayer { child })
 }
 struct Player {

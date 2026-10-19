@@ -162,6 +162,8 @@ struct App {
     storage: storage::Store,
     /// Path of a USB-drive video to play on the HDMI output, if any.
     usb_playback: Arc<Mutex<Option<PathBuf>>>,
+    /// Where mpv's IPC socket lives while a USB video plays.
+    usb_mpv_socket: PathBuf,
 }
 
 #[tokio::main]
@@ -220,6 +222,7 @@ async fn main() -> Result<()> {
         } => {
             std::fs::create_dir_all(&runtime_dir)?;
             worker.video_socket = runtime_dir.join("video.sock");
+            let usb_mpv_socket = video::usb_mpv_socket(&worker.video_socket);
             let shutdown = Arc::new(AtomicBool::new(false));
             let storage = storage::start(runtime_dir.clone(), shutdown.clone());
             let app = App {
@@ -241,6 +244,7 @@ async fn main() -> Result<()> {
                 time_synced: Arc::new(AtomicBool::new(false)),
                 storage,
                 usb_playback: Arc::new(Mutex::new(None)),
+                usb_mpv_socket,
             };
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             let observed = app.clone();
@@ -327,14 +331,6 @@ impl App {
                 .and_then(functionfs::udc_state)
         );
         s["build_id"] = json!(update::running_build());
-        s["usb_playback"] = json!(
-            self.usb_playback
-                .lock()
-                .unwrap()
-                .as_ref()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-        );
         if let Some(clock) = clock::now() {
             s["time_unix_ms"] = json!(clock.unix_ms);
             s["time"] = json!(clock.display());

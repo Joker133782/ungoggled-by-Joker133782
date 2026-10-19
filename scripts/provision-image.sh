@@ -5,7 +5,7 @@ set -euo pipefail
 . /tmp/dji-image.env
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav v4l-utils openssh-server network-manager dnsmasq-base curl ca-certificates sudo iw rfkill cloud-guest-utils mtools
+apt-get install -y --no-install-recommends gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav v4l-utils openssh-server network-manager dnsmasq-base curl ca-certificates sudo iw rfkill cloud-guest-utils mtools mpv
 # A reused build tree keeps the release directories of earlier builds, which
 # would ship as dead weight; only this build's release belongs in the image.
 rm -rf /opt/dji-hdmi/releases

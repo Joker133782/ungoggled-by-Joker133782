@@ -31,10 +31,16 @@ struct Mounted {
 pub struct Store {
     mounted: Arc<Mutex<Vec<Mounted>>>,
     videos: Arc<Mutex<HashMap<String, PathBuf>>>,
+    /// Under the runtime directory (tmpfs): gone on every reboot or power
+    /// loss, so a card full of old clips never leaves stale thumbnails on
+    /// the SD card.
+    thumb_dir: PathBuf,
 }
 impl Store {
     /// Rescan every currently mounted drive and return the videos found.
     /// Assigns each file a stable opaque id, resolvable with `resolve`.
+    /// Generates any thumbnail missing from the cache along the way, so the
+    /// first scan after plugging in a drive is slower than later ones.
     pub fn list_videos(&self) -> Vec<Value> {
         let mounted = self.mounted.lock().unwrap().clone();
         let mut registry = self.videos.lock().unwrap();
@@ -49,7 +55,10 @@ impl Store {
                     .to_string_lossy()
                     .into_owned();
                 let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                out.push(json!({"id":id,"name":name,"device":drive.device,"size":size}));
+                let thumbnail = ensure_thumbnail(&path, &self.thumb_dir.join(format!("{id}.jpg")));
+                out.push(
+                    json!({"id":id,"name":name,"device":drive.device,"size":size,"thumbnail":thumbnail}),
+                );
                 registry.insert(id, path);
             }
         }
@@ -59,15 +68,68 @@ impl Store {
     pub fn resolve(&self, id: &str) -> Option<PathBuf> {
         self.videos.lock().unwrap().get(id).cloned()
     }
+    /// The cached thumbnail for an id, if one has been generated.
+    pub fn thumbnail(&self, id: &str) -> Option<PathBuf> {
+        let path = valid_id(id).then(|| self.thumb_dir.join(format!("{id}.jpg")))?;
+        path.exists().then_some(path)
+    }
+}
+fn valid_id(id: &str) -> bool {
+    id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+/// Grab one frame as a small JPEG with GStreamer, caching it by id so a
+/// rescan only pays for videos it has not thumbnailed yet. Best-effort: a
+/// file GStreamer cannot demux just stays without a thumbnail.
+fn ensure_thumbnail(video: &Path, dest: &Path) -> bool {
+    if dest.exists() {
+        return true;
+    }
+    let tmp = dest.with_extension("tmp");
+    let location = format!("location={}", crate::video::quote_gst(&video.to_string_lossy()));
+    let out = format!("location={}", crate::video::quote_gst(&tmp.to_string_lossy()));
+    let ok = Command::new("timeout")
+        .args(["5", "gst-launch-1.0"])
+        .args([
+            "filesrc",
+            &location,
+            "!",
+            "decodebin",
+            "!",
+            "identity",
+            "eos-after=1",
+            "!",
+            "videoconvert",
+            "!",
+            "videoscale",
+            "!",
+            "video/x-raw,width=160",
+            "!",
+            "jpegenc",
+            "!",
+            "filesink",
+            &out,
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success())
+        && tmp.exists();
+    if ok {
+        fs::rename(&tmp, dest).is_ok()
+    } else {
+        let _ = fs::remove_file(&tmp);
+        false
+    }
 }
 
 /// Poll for removable USB block devices, mount new ones read-only under
 /// `runtime_dir/usb-media`, and unmount+remove ones that disappeared. Never
 /// touches the device the root filesystem lives on.
 pub fn start(runtime_dir: PathBuf, shutdown: Arc<std::sync::atomic::AtomicBool>) -> Store {
+    let thumb_dir = runtime_dir.join("usb-thumbs");
+    let _ = fs::create_dir_all(&thumb_dir);
     let store = Store {
         mounted: Arc::new(Mutex::new(Vec::new())),
         videos: Arc::new(Mutex::new(HashMap::new())),
+        thumb_dir,
     };
     let base = runtime_dir.join("usb-media");
     let _ = fs::create_dir_all(&base);
@@ -242,6 +304,14 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert!(a.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn rejects_thumbnail_ids_that_are_not_plain_hex() {
+        assert!(!valid_id("../../etc/passwd"));
+        assert!(!valid_id("short"));
+        assert!(!valid_id("zzzzzzzzzzzzzzzz"));
+        assert!(valid_id("0123456789abcdef"));
     }
 
     #[test]

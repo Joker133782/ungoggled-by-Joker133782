@@ -591,7 +591,7 @@ export default function App() {
         onBusy={setUpdateBusy}
       />
       <Versions disabled={updateBusy} />
-      <UsbVideos playing={status?.usb_playback} disabled={updateBusy} />
+      <UsbVideos disabled={updateBusy} />
       <details className="panel diagnostics">
         <summary>Diagnostics</summary>
         <dl>

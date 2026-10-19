@@ -701,12 +701,37 @@ footer {
 }
 .usb-video-list li {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
   padding: 10px 0;
   border-top: 1px solid #303844;
+}
+.usb-thumbnail {
+  width: 64px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #1b222c;
+}
+.usb-thumbnail-empty {
+  border: 1px solid #303844;
+}
+.usb-now-playing {
+  background: #1b222c;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 12px 0;
+}
+.usb-now-playing input[type="range"] {
+  width: 100%;
+}
+.usb-time-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #8c9caf;
+  margin-bottom: 10px;
 }
 .update-history ol {
   padding-left: 18px;

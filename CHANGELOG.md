@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.5
+
+- USB videos: play/pause and seek from the web interface (video stays on the HDMI output only), switching the playback backend from GStreamer to mpv. Needs `mpv` on the Pi, now included in the SD-card image; an already-flashed Pi needs a re-flash or `apt install mpv`.
+- USB videos: thumbnails, cached in the tmpfs runtime directory so they never accumulate on the SD card and are gone after every reboot or power loss.
+
 ## 0.3.4
 
 - Experimental: browse video files on a USB drive or action camera plugged into a regular USB-A host port and play one on the HDMI output, listed in the web interface. Not hardware-verified for every camera and codec; resolution and codec support depend on what the Pi's GStreamer install can decode.

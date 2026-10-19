@@ -51,8 +51,12 @@ pub fn router(app: App, web: std::path::PathBuf) -> Router {
         .route("/api/preview.jpg", get(preview))
         .route("/api/wifi", get(get_wifi).post(save_wifi))
         .route("/api/usb-videos", get(usb_videos))
-        .route("/api/usb-videos/{id}/play", post(play_usb_video))
+        .route("/api/usb-videos/status", get(usb_video_status))
+        .route("/api/usb-videos/pause", post(pause_usb_video))
+        .route("/api/usb-videos/seek", post(seek_usb_video))
         .route("/api/usb-videos/stop", post(stop_usb_video))
+        .route("/api/usb-videos/{id}/play", post(play_usb_video))
+        .route("/api/usb-videos/{id}/thumbnail", get(usb_video_thumbnail))
         .layer(DefaultBodyLimit::max(assets::MAX_VIDEO_UPLOAD + 65536))
         .merge(crate::update::api::routes())
         .fallback_service(ServeDir::new(web))
@@ -248,6 +252,22 @@ async fn usb_videos(State(a): State<App>) -> ApiResult<Json<Value>> {
         .map_err(bad)?;
     Ok(Json(json!({"videos":videos})))
 }
+async fn usb_video_thumbnail(State(a): State<App>, Path(id): Path<String>) -> Response {
+    let Some(path) = a.storage.thumbnail(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match tokio::task::spawn_blocking(move || std::fs::read(path)).await {
+        Ok(Ok(bytes)) => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
 async fn play_usb_video(
     State(a): State<App>,
     h: HeaderMap,
@@ -264,6 +284,80 @@ async fn play_usb_video(
 async fn stop_usb_video(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
     guard(&h)?;
     *a.usb_playback.lock().unwrap() = None;
+    Ok(Json(json!({"accepted":true})))
+}
+/// Position and duration come from mpv's IPC socket, so they are only asked
+/// for while something is actually playing; otherwise this is a cheap check
+/// of the requested-playback path with no process to talk to.
+async fn usb_video_status(State(a): State<App>) -> Json<Value> {
+    let name = a
+        .usb_playback
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned());
+    let Some(name) = name else {
+        return Json(json!({"playing":false}));
+    };
+    let socket = a.usb_mpv_socket.clone();
+    let (paused, position, duration) = tokio::task::spawn_blocking(move || {
+        let get = |prop: &str| {
+            crate::video::mpv_command(&socket, json!(["get_property", prop]))
+                .ok()
+                .and_then(|r| r.get("data").cloned())
+        };
+        (
+            get("pause").and_then(|v| v.as_bool()),
+            get("time-pos").and_then(|v| v.as_f64()),
+            get("duration").and_then(|v| v.as_f64()),
+        )
+    })
+    .await
+    .unwrap_or_default();
+    Json(json!({"playing":true,"name":name,"paused":paused,"position":position,"duration":duration}))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PauseChange {
+    paused: bool,
+}
+async fn pause_usb_video(
+    State(a): State<App>,
+    h: HeaderMap,
+    Json(c): Json<PauseChange>,
+) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    let socket = a.usb_mpv_socket.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::video::mpv_command(&socket, json!(["set_property", "pause", c.paused]))
+    })
+    .await
+    .map_err(bad)?
+    .map_err(bad)?;
+    Ok(Json(json!({"accepted":true})))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeekChange {
+    position: f64,
+}
+async fn seek_usb_video(
+    State(a): State<App>,
+    h: HeaderMap,
+    Json(c): Json<SeekChange>,
+) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    if !c.position.is_finite() || c.position < 0.0 {
+        return Err(bad("Invalid position"));
+    }
+    let socket = a.usb_mpv_socket.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::video::mpv_command(&socket, json!(["seek", c.position, "absolute+exact"]))
+    })
+    .await
+    .map_err(bad)?
+    .map_err(bad)?;
     Ok(Json(json!({"accepted":true})))
 }
 async fn get_wifi(State(a): State<App>) -> Json<Value> {

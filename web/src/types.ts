@@ -35,7 +35,6 @@ export type Status = {
   fallback_video?: boolean;
   goggles_protocol?: "goggles3" | "goggles2";
   goggles_protocol_state?: "probing" | "video" | "forced";
-  usb_playback?: string | null;
 };
 export type Settings = {
   hdmi_mode: string;
@@ -68,6 +67,14 @@ export type UsbVideo = {
   name: string;
   device: string;
   size: number;
+  thumbnail: boolean;
+};
+export type UsbVideoStatus = {
+  playing: boolean;
+  name?: string;
+  paused?: boolean | null;
+  position?: number | null;
+  duration?: number | null;
 };
 export type Wifi = {
   available: boolean;
