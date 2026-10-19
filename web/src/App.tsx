@@ -9,6 +9,7 @@ import { SoftwareUpdate } from "./components/SoftwareUpdate";
 import { useReleases } from "./releases";
 import { WifiPanel } from "./components/WifiPanel";
 import { HardwarePanel } from "./components/HardwarePanel";
+import { UsbVideos } from "./components/UsbVideos";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 const phases: Record<string, string> = {
   streaming: "Receiving video",
@@ -590,6 +591,7 @@ export default function App() {
         onBusy={setUpdateBusy}
       />
       <Versions disabled={updateBusy} />
+      <UsbVideos playing={status?.usb_playback} disabled={updateBusy} />
       <details className="panel diagnostics">
         <summary>Diagnostics</summary>
         <dl>

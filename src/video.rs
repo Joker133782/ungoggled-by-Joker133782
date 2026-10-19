@@ -62,6 +62,70 @@ struct Chunk {
     data: Vec<u8>,
     received: Instant,
 }
+/// One-shot playback of a file from a USB mass-storage drive, as opposed to
+/// the live goggles decoder or the looping fallback video.
+struct UsbPlayer {
+    child: Child,
+}
+impl UsbPlayer {
+    /// True once the pipeline has exited, whether from reaching the end of
+    /// the file or from an error; either way there is nothing left to show.
+    fn finished(&mut self) -> bool {
+        self.child.try_wait().ok().flatten().is_some()
+    }
+}
+impl Drop for UsbPlayer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+/// Quote a value for GStreamer's `gst_parse_launch` pipeline syntax, so a
+/// path containing spaces or syntax characters (`!`, `,`) is not misread.
+fn quote_gst(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+fn spawn_usb_player(args: &WorkerArgs, path: &Path) -> anyhow::Result<UsbPlayer> {
+    let mut sink = if args.output == "hdmi" {
+        "kmssink driver-name=vc4 sync=true".to_owned()
+    } else {
+        "fakesink sync=true".to_owned()
+    };
+    if args.output == "hdmi"
+        && let Some(id) = args.connector
+    {
+        sink += &format!(" connector-id={id}");
+    }
+    let location = format!("location={}", quote_gst(&path.to_string_lossy()));
+    let mut cmd = Command::new("gst-launch-1.0");
+    cmd.args([
+        "-v",
+        "filesrc",
+        &location,
+        "!",
+        "decodebin",
+        "!",
+        "queue",
+        "!",
+        "videoconvert",
+        "!",
+        "videoscale",
+        "!",
+    ]);
+    cmd.args(sink.split_whitespace());
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    // -v makes gst-launch chatty on stdout; drain it so a full pipe never
+    // blocks the pipeline.
+    let bus = child.stdout.take().unwrap();
+    thread::spawn(move || {
+        for _ in BufReader::new(bus).lines().map_while(Result::ok) {}
+    });
+    Ok(UsbPlayer { child })
+}
 struct Player {
     child: Child,
     heartbeat: Arc<Mutex<Option<Instant>>>,
@@ -192,6 +256,7 @@ pub fn start(
     report: Report,
     preview: Preview,
     shutdown: Arc<AtomicBool>,
+    usb_playback: Arc<Mutex<Option<std::path::PathBuf>>>,
 ) -> anyhow::Result<thread::JoinHandle<()>> {
     if args.video_socket.exists() {
         std::fs::remove_file(&args.video_socket)?;
@@ -208,6 +273,8 @@ pub fn start(
     Ok(thread::spawn(move || {
         let mut child: Option<Player> = None;
         let mut fallback: Option<Loop> = None;
+        let mut usb_player: Option<UsbPlayer> = None;
+        let mut current_usb: Option<std::path::PathBuf> = None;
         let mut fallback_retry = Instant::now() - Duration::from_secs(5);
         let mut display: Option<crate::display::Display> = None;
         let mut current = store.get();
@@ -260,6 +327,44 @@ pub fn start(
                         report(json!({"hdmi":"unavailable","display_error":format!("{e:#}")}))
                     }
                 }
+            }
+            // An explicit request to play a USB-drive video takes over the
+            // display from both live goggles input and the fallback loop,
+            // until it finishes, errors, or is stopped from the web interface.
+            let requested_usb = usb_playback.lock().unwrap().clone();
+            if requested_usb != current_usb {
+                child = None;
+                fallback = None;
+                usb_player = None;
+                current_usb = requested_usb;
+            }
+            if usb_player.as_mut().is_some_and(UsbPlayer::finished) {
+                usb_player = None;
+                current_usb = None;
+                *usb_playback.lock().unwrap() = None;
+            }
+            if let Some(path) = current_usb.clone()
+                && usb_player.is_none()
+                && args.output == "hdmi"
+                && display.is_some()
+            {
+                match spawn_usb_player(&args, &path) {
+                    Ok(p) => usb_player = Some(p),
+                    Err(e) => {
+                        report(json!({"message":format!("USB video playback: {e:#}")}));
+                        current_usb = None;
+                        *usb_playback.lock().unwrap() = None;
+                    }
+                }
+            }
+            if current_usb.is_some() {
+                // Drop whatever the goggles send meanwhile; nothing is
+                // decoding it while a USB clip owns the display.
+                while let Ok(c) = rx.try_recv() {
+                    queued.fetch_sub(c.data.len(), Ordering::Relaxed);
+                }
+                thread::sleep(Duration::from_millis(100));
+                continue;
             }
             if child
                 .as_mut()

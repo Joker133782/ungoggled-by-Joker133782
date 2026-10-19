@@ -12,6 +12,7 @@ mod history;
 mod protocol;
 mod session;
 mod settings;
+mod storage;
 mod update;
 mod v1v2;
 mod video;
@@ -158,6 +159,9 @@ struct App {
     beeper_test: Arc<AtomicBool>,
     /// Latched once the clock has been set from a browser or NTP since boot.
     time_synced: Arc<AtomicBool>,
+    storage: storage::Store,
+    /// Path of a USB-drive video to play on the HDMI output, if any.
+    usb_playback: Arc<Mutex<Option<PathBuf>>>,
 }
 
 #[tokio::main]
@@ -216,6 +220,8 @@ async fn main() -> Result<()> {
         } => {
             std::fs::create_dir_all(&runtime_dir)?;
             worker.video_socket = runtime_dir.join("video.sock");
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let storage = storage::start(runtime_dir.clone(), shutdown.clone());
             let app = App {
                 status: Arc::new(Mutex::new(
                     json!({"phase":"stopped","video_bytes":0,"bitrate_mbps":0,"hdmi":"idle"}),
@@ -223,7 +229,7 @@ async fn main() -> Result<()> {
                 last_output: Arc::new(Mutex::new(None)),
                 enabled: Arc::new(AtomicBool::new(!no_autostart)),
                 restart: Arc::new(AtomicU64::new(0)),
-                shutdown: Arc::new(AtomicBool::new(false)),
+                shutdown,
                 since: Instant::now(),
                 settings: settings::Store::open(data_dir)?,
                 history: Arc::new(Mutex::new(history::History::new())),
@@ -233,6 +239,8 @@ async fn main() -> Result<()> {
                 wifi_error: Arc::new(Mutex::new(None)),
                 beeper_test: Arc::new(AtomicBool::new(false)),
                 time_synced: Arc::new(AtomicBool::new(false)),
+                storage,
+                usb_playback: Arc::new(Mutex::new(None)),
             };
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             let observed = app.clone();
@@ -243,6 +251,7 @@ async fn main() -> Result<()> {
                 report.clone(),
                 app.preview.clone(),
                 app.shutdown.clone(),
+                app.usb_playback.clone(),
             )?;
             let supervisor = supervise(app.clone(), worker);
             let hardware_status = app.clone();
@@ -318,6 +327,14 @@ impl App {
                 .and_then(functionfs::udc_state)
         );
         s["build_id"] = json!(update::running_build());
+        s["usb_playback"] = json!(
+            self.usb_playback
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+        );
         if let Some(clock) = clock::now() {
             s["time_unix_ms"] = json!(clock.unix_ms);
             s["time"] = json!(clock.display());

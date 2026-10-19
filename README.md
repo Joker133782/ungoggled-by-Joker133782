@@ -30,6 +30,7 @@ separately.
 - Three optional plain GPIO LEDs, one each for goggles, video and HDMI state.
 - An optional GPIO power button that shuts the Pi down when pressed.
 - Reboot and shut down the Pi from the web interface, with a confirmation step.
+- Experimental: browse and play back video files from a USB drive or action camera on the HDMI output. See **USB videos** below.
 
 ## Goggles 2 (experimental)
 
@@ -69,6 +70,21 @@ gadget port used for Goggles 2/3) with a data-capable cable, then set in
 ```
 UNGOGGLED_GOGGLES=v1v2
 ```
+
+## USB videos (experimental)
+
+Plug a USB drive or an action camera acting as USB mass storage into one of
+the Pi's regular USB-A ports (never the USB-C gadget port the goggles use).
+It is mounted read-only automatically; video files found on it (`.mp4`,
+`.mov`, `.mkv`, `.avi`, `.m4v`, `.insv`, `.lrv`) are listed in the web
+interface under **USB videos**. Playing one takes over the HDMI output from
+live goggles video and the fallback loop until it ends or **Stop** is
+pressed; unmounting the drive removes it from the list. Unlike the fallback
+video, there is no size limit and no re-encoding, but also no decoder
+forcing: playback uses whatever codec the file needs and whatever the Pi's
+GStreamer install can decode for it, so very high resolutions or HEVC clips
+may not play smoothly depending on hardware decoder availability. Not
+hardware-verified.
 
 ## Hardware and wiring
 

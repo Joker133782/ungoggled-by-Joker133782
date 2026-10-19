@@ -50,6 +50,9 @@ pub fn router(app: App, web: std::path::PathBuf) -> Router {
         .route("/api/images/{id}", get(image_file).delete(remove_image))
         .route("/api/preview.jpg", get(preview))
         .route("/api/wifi", get(get_wifi).post(save_wifi))
+        .route("/api/usb-videos", get(usb_videos))
+        .route("/api/usb-videos/{id}/play", post(play_usb_video))
+        .route("/api/usb-videos/stop", post(stop_usb_video))
         .layer(DefaultBodyLimit::max(assets::MAX_VIDEO_UPLOAD + 65536))
         .merge(crate::update::api::routes())
         .fallback_service(ServeDir::new(web))
@@ -238,6 +241,30 @@ async fn preview(State(a): State<App>) -> Response {
         [(header::CACHE_CONTROL, "no-store")],
     )
         .into_response()
+}
+async fn usb_videos(State(a): State<App>) -> ApiResult<Json<Value>> {
+    let videos = tokio::task::spawn_blocking(move || a.storage.list_videos())
+        .await
+        .map_err(bad)?;
+    Ok(Json(json!({"videos":videos})))
+}
+async fn play_usb_video(
+    State(a): State<App>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    let path = a
+        .storage
+        .resolve(&id)
+        .ok_or_else(|| bad("Unknown video; rescan the USB drive"))?;
+    *a.usb_playback.lock().unwrap() = Some(path);
+    Ok(Json(json!({"accepted":true})))
+}
+async fn stop_usb_video(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    *a.usb_playback.lock().unwrap() = None;
+    Ok(Json(json!({"accepted":true})))
 }
 async fn get_wifi(State(a): State<App>) -> Json<Value> {
     let mut s = wifi::status();

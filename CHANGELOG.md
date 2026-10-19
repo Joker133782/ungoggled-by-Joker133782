@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.4
+
+- Experimental: browse video files on a USB drive or action camera plugged into a regular USB-A host port and play one on the HDMI output, listed in the web interface. Not hardware-verified for every camera and codec; resolution and codec support depend on what the Pi's GStreamer install can decode.
+
 ## 0.3.3
 
 - Experimental, hardware-unverified USB-host receiver for the original DJI FPV Goggles (V1/V2), based on the community-reverse-engineered `voc-poc` protocol. Opt in with `UNGOGGLED_GOGGLES=v1v2`; requires a USB-A host port, not the gadget USB-C port. The exact stream framing is not fully understood even upstream.
