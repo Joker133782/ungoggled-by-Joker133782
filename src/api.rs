@@ -315,7 +315,9 @@ async fn usb_video_status(State(a): State<App>) -> Json<Value> {
     })
     .await
     .unwrap_or_default();
-    Json(json!({"playing":true,"name":name,"paused":paused,"position":position,"duration":duration}))
+    Json(
+        json!({"playing":true,"name":name,"paused":paused,"position":position,"duration":duration}),
+    )
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

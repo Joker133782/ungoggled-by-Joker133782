@@ -85,8 +85,14 @@ fn ensure_thumbnail(video: &Path, dest: &Path) -> bool {
         return true;
     }
     let tmp = dest.with_extension("tmp");
-    let location = format!("location={}", crate::video::quote_gst(&video.to_string_lossy()));
-    let out = format!("location={}", crate::video::quote_gst(&tmp.to_string_lossy()));
+    let location = format!(
+        "location={}",
+        crate::video::quote_gst(&video.to_string_lossy())
+    );
+    let out = format!(
+        "location={}",
+        crate::video::quote_gst(&tmp.to_string_lossy())
+    );
     let ok = Command::new("timeout")
         .args(["5", "gst-launch-1.0"])
         .args([

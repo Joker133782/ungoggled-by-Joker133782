@@ -114,9 +114,8 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
       <h2>USB videos (experimental)</h2>
       <p className="help">
         Plug an action camera or USB drive into one of the Pi's regular USB-A
-        ports (not the goggles port) to list its video files here and play
-        one on the HDMI output. Not hardware-verified for every camera and
-        codec.
+        ports (not the goggles port) to list its video files here and play one
+        on the HDMI output. Not hardware-verified for every camera and codec.
       </p>
       {playing && (
         <div className="usb-now-playing">
@@ -144,7 +143,10 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
             >
               {status?.paused ? "Resume" : "Pause"}
             </button>
-            <button disabled={disabled || busy === "stop"} onClick={() => void stop()}>
+            <button
+              disabled={disabled || busy === "stop"}
+              onClick={() => void stop()}
+            >
               Stop
             </button>
           </div>
@@ -172,7 +174,10 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
                   {v.device} · {bytes(v.size)}
                 </div>
               </div>
-              <button disabled={disabled || busy === v.id} onClick={() => void play(v)}>
+              <button
+                disabled={disabled || busy === v.id}
+                onClick={() => void play(v)}
+              >
                 Play
               </button>
             </li>
@@ -187,7 +192,9 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
 function Thumbnail({ video }: { video: UsbVideo }) {
   const [failed, setFailed] = useState(false);
   if (!video.thumbnail || failed) {
-    return <div className="usb-thumbnail usb-thumbnail-empty" aria-hidden="true" />;
+    return (
+      <div className="usb-thumbnail usb-thumbnail-empty" aria-hidden="true" />
+    );
   }
   return (
     <img
