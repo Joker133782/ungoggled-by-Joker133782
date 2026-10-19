@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Experimental, hardware-unverified USB-host receiver for the original DJI FPV Goggles (V1/V2), based on the community-reverse-engineered `voc-poc` protocol. Opt in with `UNGOGGLED_GOGGLES=v1v2`; requires a USB-A host port, not the gadget USB-C port. The exact stream framing is not fully understood even upstream.
+
 ## 0.3.2
 
 - Loop an uploaded MP4 (H.264, up to 1080p and 64 MiB) as the HDMI fallback while no video arrives. Uploads are demuxed without re-encoding and use the hardware decoder.

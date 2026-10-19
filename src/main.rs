@@ -13,6 +13,7 @@ mod protocol;
 mod session;
 mod settings;
 mod update;
+mod v1v2;
 mod video;
 mod wifi;
 
@@ -118,7 +119,10 @@ pub struct WorkerArgs {
     accessory_pid: u16,
     /// Goggles protocol: `auto` tries the last working one first and falls back
     /// to the other when no video arrives; `goggles3` or `goggles2` force one.
-    #[arg(long,default_value="auto",value_parser=["auto","goggles3","goggles2"],env="UNGOGGLED_GOGGLES")]
+    /// `v1v2` is a separate, experimental USB-host receiver for the original
+    /// DJI FPV Goggles (plugged into a USB-A host port, not the gadget port)
+    /// and is never selected by `auto`.
+    #[arg(long,default_value="auto",value_parser=["auto","goggles3","goggles2","v1v2"],env="UNGOGGLED_GOGGLES")]
     goggles: String,
     /// Which protocol worked for which goggles (by their AOA strings).
     #[arg(long, default_value = "/var/lib/dji-hdmi/goggles-protocol.json")]
@@ -186,7 +190,9 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Worker(args) => {
-            let result = if args.transport == "functionfs" {
+            let result = if args.goggles == "v1v2" {
+                v1v2::run(&args)
+            } else if args.transport == "functionfs" {
                 functionfs::run(&args)
             } else {
                 gadget::run(&args)

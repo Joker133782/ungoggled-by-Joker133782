@@ -52,6 +52,24 @@ UNGOGGLED_GOGGLES=goggles2        # auto (default), goggles3 or goggles2
 UNGOGGLED_ACCESSORY_PID=11521     # 0x2d01, the PID DJI Fly presents; default 11520 (0x2d00)
 ```
 
+## Goggles V1/V2 (experimental, unverified)
+
+The original DJI FPV Goggles (V1/V2) work the other way around from Goggles
+2/3: the goggles expose a plain USB bulk interface and something else has to
+be the USB *host* (Goggles 2/3 make the Pi the accessory instead). This is
+based on the community project [voc-poc](https://github.com/fpv-wtf/voc-poc),
+which itself calls the exact stream framing "currently largely unknown" and
+only claims it "sort of just works" once piped into ffmpeg. **This path has
+not run against real V1/V2 hardware and may not produce a usable picture.**
+
+Plug the goggles into one of the Pi's regular USB-A ports (not the USB-C
+gadget port used for Goggles 2/3) with a data-capable cable, then set in
+`/etc/default/dji-hdmi` and restart `dji-hdmi`:
+
+```
+UNGOGGLED_GOGGLES=v1v2
+```
+
 ## Hardware and wiring
 
 You need a Raspberry Pi 4, microSD card of at least 8 GB, a USB-C data cable,
