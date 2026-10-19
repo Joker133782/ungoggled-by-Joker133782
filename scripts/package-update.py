@@ -23,6 +23,10 @@ for name, source in {
     'THIRD_PARTY.md': 'THIRD_PARTY.md',
 }.items():
     files[name] = (ROOT / source).read_bytes()
+# Lets an update offline-install mpv (for USB-drive video playback) on a Pi
+# that predates it, without needing internet on the Pi. See scripts/bundle-mpv.sh.
+for p in sorted((ROOT / 'build/mpv-debs').glob('*.deb')):
+    files['packages/' + p.name] = p.read_bytes()
 files['RELEASE_NOTES.md'] = subprocess.check_output(['python3', 'scripts/version.py', '--notes'], cwd=ROOT)
 manifest = {
     'format': 1, 'product': 'ungoggled', 'version': version,

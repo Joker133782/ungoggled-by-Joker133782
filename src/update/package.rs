@@ -68,6 +68,10 @@ fn allowed(name: &str) -> bool {
             | "README.md"
             | "THIRD_PARTY.md"
     ) || name.starts_with("web/")
+        // Offline-installable .deb files for an optional system dependency
+        // (currently just mpv, for USB-drive video playback); see
+        // `install::install_bundled_packages`.
+        || (name.starts_with("packages/") && name.ends_with(".deb"))
 }
 pub fn unpack(archive: &Path, destination: &Path, arch: &str) -> Result<Manifest> {
     ensure!(

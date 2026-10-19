@@ -87,14 +87,17 @@ the browser. Unlike the fallback video, there is no size limit and no
 re-encoding.
 
 This plays through **mpv**, not GStreamer, so it needs `mpv` installed on
-the Pi. It is included from this version onward in the SD-card image, but a
-Pi already running an older image needs either a fresh SD-card flash or
-`apt install mpv` over SSH before this feature works; without it the web
-interface reports that mpv is missing instead of failing silently. Playback
-otherwise uses whatever codec and resolution the file needs and whatever the
-Pi's mpv/ffmpeg install can decode for it, so very high resolutions or HEVC
-clips may not play smoothly without working hardware decode. Not
-hardware-verified.
+the Pi. It is included in the SD-card image. An update installed from the
+web interface also carries mpv's `.deb` files and installs them offline if
+missing, so a Pi running an older release picks it up automatically on its
+next update, without needing internet access on the Pi itself; that is a
+one-time, best-effort step that never affects the rest of the update (see
+`scripts/bundle-mpv.sh`). If it still could not install for some reason, the
+web interface reports that mpv is missing instead of failing silently.
+Playback otherwise uses whatever codec and resolution the file needs and
+whatever the Pi's mpv/ffmpeg install can decode for it, so very high
+resolutions or HEVC clips may not play smoothly without working hardware
+decode. Not hardware-verified.
 
 ## Hardware and wiring
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.7
+
+- The update file now carries mpv's `.deb` packages and installs them offline after a successful update, so a Pi on an older release picks up USB-drive video playback automatically without needing internet on the Pi or a manual `apt install`. Best-effort: installing the packages never affects the rest of the update, succeeded or failed.
+
 ## 0.3.6
 
 - Fix USB video seeking: mpv's IPC command array rejected the combined `absolute+exact` seek flag. Found by actually running the thumbnail GStreamer pipeline and the mpv IPC protocol for the first time, after getting sudo on the build host; both now verified to work as coded (except real DRM/KMS output, still unverified without a Pi and monitor).

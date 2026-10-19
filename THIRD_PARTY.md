@@ -36,6 +36,15 @@ SOFTWARE.
 
 Cargo and npm dependency licenses remain with their respective authors.
 
+## Bundled mpv packages
+
+An update may carry Debian's unmodified `mpv` `.deb` package and its new
+dependencies (also unmodified Debian builds), for offline-installing mpv on
+a Pi that predates it (used for USB-drive video playback). No mpv or ffmpeg
+source or binary is embedded in the Rust executable; these are the exact
+packages Debian trixie publishes, under their own licenses (mpv is GPL-2.0-
+or-later). See `scripts/bundle-mpv.sh` for how they are obtained.
+
 ## Optional legacy decoder plugin
 
 `scripts/build-legacy-omx.sh` downloads and builds unmodified gst-omx 1.14.4,

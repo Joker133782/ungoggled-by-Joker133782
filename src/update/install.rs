@@ -28,6 +28,11 @@ pub trait Host {
     fn migrate(&self, binary: &Path, data: &Path, output: &Path) -> Result<Vec<String>>;
     /// `build` is `None` for the factory release, which reports no build ID.
     fn healthy(&self, version: &str, build: Option<&str>) -> bool;
+    /// Offline-install any bundled `.deb` packages in `dir` (if it exists
+    /// and the dependency is not already present). Returns human-readable
+    /// notes for `state.warnings`; never returns an `Err`, because a failure
+    /// here must never roll back an otherwise healthy update.
+    fn install_packages(&self, dir: &Path) -> Vec<String>;
 }
 struct System;
 impl Host for System {
@@ -82,6 +87,49 @@ impl Host for System {
             thread::sleep(Duration::from_millis(500));
         }
         false
+    }
+    fn install_packages(&self, dir: &Path) -> Vec<String> {
+        if !dir.is_dir() {
+            return Vec::new();
+        }
+        // Already present (a fresh image, or an earlier update already did
+        // this): skip without even looking at the bundled files.
+        if Command::new("mpv")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return Vec::new();
+        }
+        let debs: Vec<_> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "deb"))
+            .collect();
+        if debs.is_empty() {
+            return Vec::new();
+        }
+        let mut c = Command::new("timeout");
+        c.args(["120", "apt-get", "install", "-y", "--no-install-recommends"]);
+        c.env("DEBIAN_FRONTEND", "noninteractive");
+        c.args(&debs);
+        match c.output() {
+            Ok(o) if o.status.success() => {
+                vec!["Installed mpv for USB-drive video playback".into()]
+            }
+            Ok(o) => vec![format!(
+                "Could not install mpv for USB-drive video playback (core update unaffected): {}",
+                String::from_utf8_lossy(&o.stderr)
+                    .lines()
+                    .next_back()
+                    .unwrap_or("unknown error")
+            )],
+            Err(e) => vec![format!(
+                "Could not run apt-get for mpv ({e}); core update unaffected"
+            )],
+        }
     }
 }
 fn lock_wait(paths: &Paths) -> Result<Lock> {
@@ -373,6 +421,11 @@ fn switch(
         )?;
         state.phase = Phase::Succeeded;
         state.message = next.done.clone();
+        // Best-effort and after the point of no return: whatever happens
+        // here, the update itself already succeeded.
+        state
+            .warnings
+            .extend(host.install_packages(&job.join("package/packages")));
         paths.save(state)?;
         Ok(())
     })();
@@ -479,6 +532,7 @@ mod tests {
         healthy: bool,
         calls: RefCell<Vec<String>>,
         checked: RefCell<Vec<(String, Option<String>)>>,
+        packages_checked: RefCell<Vec<PathBuf>>,
     }
     impl FakeHost {
         fn new(healthy: bool) -> Self {
@@ -486,6 +540,7 @@ mod tests {
                 healthy,
                 calls: Default::default(),
                 checked: Default::default(),
+                packages_checked: Default::default(),
             }
         }
     }
@@ -502,6 +557,10 @@ mod tests {
                 .borrow_mut()
                 .push((version.into(), build.map(Into::into)));
             self.healthy
+        }
+        fn install_packages(&self, dir: &Path) -> Vec<String> {
+            self.packages_checked.borrow_mut().push(dir.to_path_buf());
+            Vec::new()
         }
     }
     fn setup() -> (Fixture, Paths, PathBuf) {
@@ -536,10 +595,22 @@ mod tests {
         (f, paths, old)
     }
     #[test]
+    fn system_install_packages_skips_a_missing_directory() {
+        assert!(
+            System
+                .install_packages(Path::new("/does/not/exist"))
+                .is_empty()
+        );
+    }
+    #[test]
     fn commits_healthy_release_and_preserves_configuration() {
         let (_f, paths, old) = setup();
         let host = FakeHost::new(true);
         apply(&paths, "123", "aarch64", &host).unwrap();
+        assert_eq!(
+            *host.packages_checked.borrow(),
+            vec![paths.job("123").unwrap().join("package/packages")]
+        );
         assert_ne!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
         assert!(old.exists());
         let state = paths.state().unwrap();
