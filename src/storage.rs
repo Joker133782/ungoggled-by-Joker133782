@@ -116,10 +116,7 @@ fn reconcile(base: &Path, mounted: &Arc<Mutex<Vec<Mounted>>>) {
             .output()
             .is_ok_and(|o| o.status.success());
         if ok {
-            guard.push(Mounted {
-                device,
-                mountpoint,
-            });
+            guard.push(Mounted { device, mountpoint });
         } else {
             let _ = fs::remove_dir(&mountpoint);
         }
@@ -163,7 +160,10 @@ fn root_devices() -> Vec<String> {
         return Vec::new();
     };
     let disk = root.trim_end_matches(|c: char| c.is_ascii_digit());
-    let disk = disk.strip_suffix('p').filter(|_| disk.contains("mmcblk")).unwrap_or(disk);
+    let disk = disk
+        .strip_suffix('p')
+        .filter(|_| disk.contains("mmcblk"))
+        .unwrap_or(disk);
     fs::read_dir("/sys/class/block")
         .into_iter()
         .flatten()
@@ -210,7 +210,9 @@ fn find_videos(root: &Path, max_depth: usize, max_files: usize) -> Vec<PathBuf> 
                     stack.push((path, depth + 1));
                 }
             } else if file_type.is_file()
-                && path.file_name().is_some_and(|n| is_video_file(&n.to_string_lossy()))
+                && path
+                    .file_name()
+                    .is_some_and(|n| is_video_file(&n.to_string_lossy()))
             {
                 out.push(path);
             }
@@ -244,7 +246,8 @@ mod tests {
 
     #[test]
     fn finds_videos_within_depth_and_skips_other_files() {
-        let dir = std::env::temp_dir().join(format!("ungoggled-storage-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ungoggled-storage-test-{}", std::process::id()));
         let nested = dir.join("DCIM").join("100MEDIA");
         fs::create_dir_all(&nested).unwrap();
         fs::write(nested.join("clip.MP4"), b"x").unwrap();

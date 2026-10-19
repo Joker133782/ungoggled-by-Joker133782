@@ -121,9 +121,11 @@ fn spawn_usb_player(args: &WorkerArgs, path: &Path) -> anyhow::Result<UsbPlayer>
     // -v makes gst-launch chatty on stdout; drain it so a full pipe never
     // blocks the pipeline.
     let bus = child.stdout.take().unwrap();
-    thread::spawn(move || {
-        for _ in BufReader::new(bus).lines().map_while(Result::ok) {}
-    });
+    thread::spawn(
+        move || {
+            for _ in BufReader::new(bus).lines().map_while(Result::ok) {}
+        },
+    );
     Ok(UsbPlayer { child })
 }
 struct Player {

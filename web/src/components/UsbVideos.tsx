@@ -61,14 +61,16 @@ export function UsbVideos({
       <h2>USB videos (experimental)</h2>
       <p className="help">
         Plug an action camera or USB drive into one of the Pi's regular USB-A
-        ports (not the goggles port) to list its video files here and play
-        one on the HDMI output. Not hardware-verified for every camera and
-        codec.
+        ports (not the goggles port) to list its video files here and play one
+        on the HDMI output. Not hardware-verified for every camera and codec.
       </p>
       {playing && (
         <p role="status">
           Playing <strong>{playing}</strong> on the HDMI output.{" "}
-          <button disabled={disabled || busy === "stop"} onClick={() => void stop()}>
+          <button
+            disabled={disabled || busy === "stop"}
+            onClick={() => void stop()}
+          >
             Stop
           </button>
         </p>
