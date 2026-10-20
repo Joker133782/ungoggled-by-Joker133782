@@ -49,6 +49,7 @@ export type Settings = {
   beep_until_time_synced: boolean;
   stream_enabled: boolean;
   stream_quality: string;
+  auto_record: boolean;
 };
 export type ImageEntry = {
   id: string;

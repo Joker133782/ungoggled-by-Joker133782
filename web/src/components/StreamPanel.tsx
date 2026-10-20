@@ -32,7 +32,11 @@ export function StreamPanel({ disabled }: { disabled: boolean }) {
     setBusy(true);
     setError("");
     try {
-      await api("settings", { method: "POST", headers, body: JSON.stringify(next) });
+      await api("settings", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(next),
+      });
       setSettings(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
@@ -46,19 +50,33 @@ export function StreamPanel({ disabled }: { disabled: boolean }) {
     <section className="panel stream">
       <h2>Spectator stream (experimental)</h2>
       <p className="help">
-        Lets phones and tablets connected to the Pi's Wi-Fi watch the live feed in a browser,
-        separately from the HDMI output, at <a href="/watch.html">/watch.html</a>. This is not the
-        goggles' own low-latency link the pilot flies with — only something extra for bystanders.
-        The Pi's own Wi-Fi radio is the real limit, not this setting: roughly 50–100 Mbit/s total
-        for every connected viewer combined, shared with the web interface itself.
+        Lets phones and tablets connected to the Pi's Wi-Fi watch the live feed
+        in a browser, separately from the HDMI output, at{" "}
+        <a href="/watch.html">/watch.html</a>. This is not the goggles' own
+        low-latency link the pilot flies with — only something extra for
+        bystanders. The Pi's own Wi-Fi radio is the real limit, not this
+        setting: roughly 50–100 Mbit/s total for every connected viewer
+        combined, shared with the web interface itself.
       </p>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
         <label className="toggle">
           <input
             type="checkbox"
             checked={settings.stream_enabled}
             disabled={disabled || busy}
-            onChange={(e) => void save({ ...settings, stream_enabled: e.currentTarget.checked })}
+            onChange={(e) =>
+              void save({
+                ...settings,
+                stream_enabled: e.currentTarget.checked,
+              })
+            }
           />
           Enable spectator stream
         </label>
@@ -67,7 +85,9 @@ export function StreamPanel({ disabled }: { disabled: boolean }) {
           <select
             value={settings.stream_quality}
             disabled={disabled || busy || !settings.stream_enabled}
-            onChange={(e) => void save({ ...settings, stream_quality: e.currentTarget.value })}
+            onChange={(e) =>
+              void save({ ...settings, stream_quality: e.currentTarget.value })
+            }
           >
             <option value="high">High (original quality, ~1–2 viewers)</option>
             <option value="event">Event (lower quality, more viewers)</option>

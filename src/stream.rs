@@ -28,7 +28,11 @@ pub enum Quality {
 }
 impl Quality {
     pub fn parse(s: &str) -> Self {
-        if s == "event" { Self::Event } else { Self::High }
+        if s == "event" {
+            Self::Event
+        } else {
+            Self::High
+        }
     }
 }
 
@@ -117,9 +121,11 @@ fn spawn(quality: Quality) -> Result<Relay> {
     let stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    thread::spawn(move || {
-        for _ in BufReader::new(stderr).lines().map_while(Result::ok) {}
-    });
+    thread::spawn(
+        move || {
+            for _ in BufReader::new(stderr).lines().map_while(Result::ok) {}
+        },
+    );
     let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
     let sender = tx.clone();
     thread::spawn(move || {

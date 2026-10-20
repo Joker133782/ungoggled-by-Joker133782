@@ -73,7 +73,11 @@ export function RecordingPanel({
     setError("");
     try {
       const next = { ...settings, auto_record };
-      await api("settings", { method: "POST", headers, body: JSON.stringify(next) });
+      await api("settings", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(next),
+      });
       setSettings(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
@@ -149,10 +153,10 @@ export function RecordingPanel({
     <section className="panel recording">
       <h2>Recording</h2>
       <p className="help">
-        Everything here writes the live goggles feed to the SD card unmodified (no
-        re-encoding). The goggles' own on-screen display (battery, channel, signal) is part
-        of the picture if the goggles have it turned on; that is set on the goggles/DJI Fly,
-        not here.
+        Everything here writes the live goggles feed to the SD card unmodified
+        (no re-encoding). The goggles' own on-screen display (battery, channel,
+        signal) is part of the picture if the goggles have it turned on; that is
+        set on the goggles/DJI Fly, not here.
       </p>
       {diskWarning && (
         <p role="alert" className="error">
@@ -175,8 +179,9 @@ export function RecordingPanel({
           </label>
           <span className="help">
             {" "}
-            — buffers in RAM while the feed is live, saves to the SD card as soon as it
-            drops, keeps the 5 most recent flights (oldest deleted automatically).
+            — buffers in RAM while the feed is live, saves to the SD card as
+            soon as it drops, keeps the 5 most recent flights (oldest deleted
+            automatically).
           </span>
         </p>
       )}
@@ -223,7 +228,10 @@ export function RecordingPanel({
                   alt=""
                 />
               ) : (
-                <div className="usb-thumbnail usb-thumbnail-empty" aria-hidden="true" />
+                <div
+                  className="usb-thumbnail usb-thumbnail-empty"
+                  aria-hidden="true"
+                />
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 {r.name}

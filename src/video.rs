@@ -484,7 +484,12 @@ pub fn start(
                     report(json!({"message":reason}));
                     *disk_warning.lock().unwrap() = Some(warning_image.clone());
                 }
-                recording.auto_tick(&auto_record_dir, &recordings_dir, current.auto_record, !input_gone);
+                recording.auto_tick(
+                    &auto_record_dir,
+                    &recordings_dir,
+                    current.auto_record,
+                    !input_gone,
+                );
             }
             let chunk = match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(c) => c,

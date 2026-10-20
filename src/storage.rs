@@ -56,7 +56,8 @@ impl Store {
                     .into_owned();
                 let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 let thumbnail = ensure_thumbnail(&path, &self.thumb_dir.join(format!("{id}.jpg")));
-                let device = friendly_device_name(&drive.device).unwrap_or_else(|| drive.device.clone());
+                let device =
+                    friendly_device_name(&drive.device).unwrap_or_else(|| drive.device.clone());
                 out.push(
                     json!({"id":id,"name":name,"device":device,"size":size,"thumbnail":thumbnail}),
                 );
