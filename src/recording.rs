@@ -28,17 +28,10 @@ struct Active {
     started: Instant,
     bytes: u64,
 }
+#[derive(Default)]
 struct Buffer {
     entries: VecDeque<(Instant, Vec<u8>)>,
     bytes: usize,
-}
-impl Default for Buffer {
-    fn default() -> Self {
-        Self {
-            entries: VecDeque::new(),
-            bytes: 0,
-        }
-    }
 }
 impl Buffer {
     fn push(&mut self, nal: &[u8]) {
@@ -132,9 +125,7 @@ impl Controller {
     /// human-readable reason if it just dropped below the minimum. A no-op,
     /// cheap to call every tick, while nothing is recording.
     pub fn enforce_space(&self, dir: &Path) -> Option<String> {
-        if self.0.lock().unwrap().active.is_none() {
-            return None;
-        }
+        self.0.lock().unwrap().active.as_ref()?;
         if free_bytes(dir).is_some_and(|f| f >= MIN_FREE_BYTES) {
             return None;
         }
@@ -221,7 +212,8 @@ mod tests {
 
     #[test]
     fn records_and_stops_on_demand() {
-        let dir = std::env::temp_dir().join(format!("ungoggled-recording-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ungoggled-recording-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let c = Controller::default();
         assert!(!c.status()["recording"].as_bool().unwrap());
@@ -247,7 +239,8 @@ mod tests {
 
     #[test]
     fn buffer_snapshot_starts_at_the_first_sps() {
-        let dir = std::env::temp_dir().join(format!("ungoggled-recording-buf-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ungoggled-recording-buf-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let c = Controller::default();
         // A stray slice before any SPS must not appear in the saved clip.
@@ -267,7 +260,8 @@ mod tests {
 
     #[test]
     fn save_buffer_fails_cleanly_when_nothing_was_fed() {
-        let dir = std::env::temp_dir().join(format!("ungoggled-recording-empty-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ungoggled-recording-empty-{}", std::process::id()));
         let c = Controller::default();
         assert!(c.save_buffer(&dir).is_err());
     }

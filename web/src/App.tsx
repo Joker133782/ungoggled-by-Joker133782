@@ -592,7 +592,10 @@ export default function App() {
         onBusy={setUpdateBusy}
       />
       <Versions disabled={updateBusy} />
-      <RecordingPanel diskWarning={status?.disk_warning} disabled={updateBusy} />
+      <RecordingPanel
+        diskWarning={status?.disk_warning}
+        disabled={updateBusy}
+      />
       <UsbVideos disabled={updateBusy} />
       <details className="panel diagnostics">
         <summary>Diagnostics</summary>

@@ -280,6 +280,10 @@ fn spawn_loop(args: &WorkerArgs, video: &Path, report: Report) -> anyhow::Result
     })
 }
 
+// Each parameter is independent shared state the render thread owns for its
+// whole lifetime; grouping them into a struct wouldn't make any of them less
+// of a parameter, just hide the same count behind one more layer.
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     args: WorkerArgs,
     store: Store,

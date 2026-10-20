@@ -12,7 +12,8 @@ const time = (s: number) => {
   const sec = Math.floor(s % 60);
   return `${m}:${sec.toString().padStart(2, "0")}`;
 };
-const when = (s: number | null) => (s ? new Date(s * 1000).toLocaleString() : "unknown date");
+const when = (s: number | null) =>
+  s ? new Date(s * 1000).toLocaleString() : "unknown date";
 
 /**
  * Record the live goggles feed to the SD card (raw, no re-encoding), with a
@@ -123,10 +124,11 @@ export function RecordingPanel({
     <section className="panel recording">
       <h2>Recording</h2>
       <p className="help">
-        Records the live goggles feed to the SD card, unmodified (no re-encoding). Stops on
-        its own with at least 2 GB free space left. The goggles' own on-screen display (battery,
-        channel, signal) is part of the recorded picture if the goggles have it turned on;
-        that is set on the goggles/DJI Fly, not here.
+        Records the live goggles feed to the SD card, unmodified (no
+        re-encoding). Stops on its own with at least 2 GB free space left. The
+        goggles' own on-screen display (battery, channel, signal) is part of the
+        recorded picture if the goggles have it turned on; that is set on the
+        goggles/DJI Fly, not here.
       </p>
       {diskWarning && (
         <p role="alert" className="error">
@@ -138,15 +140,25 @@ export function RecordingPanel({
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {recording ? (
-          <button disabled={disabled || busy === "stop"} onClick={() => void stop()}>
-            Stop recording ({time(status?.seconds ?? 0)}, {bytes(status?.bytes ?? 0)})
+          <button
+            disabled={disabled || busy === "stop"}
+            onClick={() => void stop()}
+          >
+            Stop recording ({time(status?.seconds ?? 0)},{" "}
+            {bytes(status?.bytes ?? 0)})
           </button>
         ) : (
-          <button disabled={disabled || busy === "start"} onClick={() => void start()}>
+          <button
+            disabled={disabled || busy === "start"}
+            onClick={() => void start()}
+          >
             Start recording
           </button>
         )}
-        <button disabled={disabled || busy === "buffer"} onClick={() => void saveBuffer()}>
+        <button
+          disabled={disabled || busy === "buffer"}
+          onClick={() => void saveBuffer()}
+        >
           Save last 30 seconds
         </button>
       </div>
@@ -169,13 +181,19 @@ export function RecordingPanel({
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button disabled={disabled || busy === r.name} onClick={() => void play(r.name)}>
+                <button
+                  disabled={disabled || busy === r.name}
+                  onClick={() => void play(r.name)}
+                >
                   Play on HDMI
                 </button>
                 <a href={`/api/recordings/${r.name}`}>
                   <button disabled={disabled}>Download</button>
                 </a>
-                <button disabled={disabled || busy === r.name} onClick={() => void remove(r.name)}>
+                <button
+                  disabled={disabled || busy === r.name}
+                  onClick={() => void remove(r.name)}
+                >
                   Delete
                 </button>
               </div>
