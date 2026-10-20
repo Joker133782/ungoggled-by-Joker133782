@@ -9,7 +9,7 @@ use std::{
     collections::VecDeque,
     fs::{self, File},
     io::Write,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };

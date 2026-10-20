@@ -294,10 +294,7 @@ pub fn start(
         std::fs::remove_file(&args.video_socket)?;
     }
     let warning_image = args.video_socket.with_file_name("sd-card-full.png");
-    let _ = std::fs::write(
-        &warning_image,
-        include_bytes!("../assets/sd-card-full.png"),
-    );
+    let _ = std::fs::write(&warning_image, include_bytes!("../assets/sd-card-full.png"));
     let recordings_dir = store.dir.join("recordings");
     let socket = UnixDatagram::bind(&args.video_socket)?;
     socket.set_read_timeout(Some(Duration::from_millis(200)))?;

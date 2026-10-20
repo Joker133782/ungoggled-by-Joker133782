@@ -57,7 +57,10 @@ pub fn router(app: App, web: std::path::PathBuf) -> Router {
         .route("/api/usb-videos/stop", post(stop_usb_video))
         .route("/api/usb-videos/{id}/play", post(play_usb_video))
         .route("/api/usb-videos/{id}/thumbnail", get(usb_video_thumbnail))
-        .route("/api/recording", get(recording_status).post(start_recording))
+        .route(
+            "/api/recording",
+            get(recording_status).post(start_recording),
+        )
         .route("/api/recording/stop", post(stop_recording))
         .route("/api/recording/save-buffer", post(save_recording_buffer))
         .route(
@@ -415,10 +418,9 @@ async fn save_recording_buffer(State(a): State<App>, h: HeaderMap) -> ApiResult<
 }
 async fn list_recordings(State(a): State<App>) -> Json<Value> {
     let dir = recordings_dir(&a);
-    let recordings =
-        tokio::task::spawn_blocking(move || crate::recording::list(&dir))
-            .await
-            .unwrap_or_default();
+    let recordings = tokio::task::spawn_blocking(move || crate::recording::list(&dir))
+        .await
+        .unwrap_or_default();
     Json(json!({"recordings":recordings}))
 }
 async fn recording_file(State(a): State<App>, Path(name): Path<String>) -> Response {
