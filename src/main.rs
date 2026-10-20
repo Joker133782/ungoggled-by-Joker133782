@@ -252,7 +252,7 @@ async fn main() -> Result<()> {
                 storage,
                 usb_playback: Arc::new(Mutex::new(None)),
                 usb_mpv_socket,
-                recording: recording::Controller::default(),
+                recording: recording::Controller::new(runtime_dir.join("recording-thumbs")),
                 disk_warning: Arc::new(Mutex::new(None)),
                 stream: stream::Controller::default(),
             };

@@ -1,15 +1,17 @@
 //! Record the live goggles feed to local storage (the SD card), independent
-//! of HDMI output and the USB-drive video browser. Two ways to capture:
-//! an explicit start/stop recording, and an always-on ring buffer that can
-//! save whatever happened in roughly the last 30 seconds on demand. Both
-//! write the same raw Annex-B H.264 the live decoder already receives, with
-//! no re-encoding, matching how fallback videos are stored.
+//! of HDMI output and the USB-drive video browser. Three ways to capture,
+//! all writing the same raw Annex-B H.264 the live decoder already
+//! receives, with no re-encoding, matching how fallback videos are stored:
+//! an explicit start/stop recording, an always-on ~30 s ring buffer saved
+//! on demand, and auto-recording a whole flight (buffered in RAM, under the
+//! runtime tmpfs, while the feed is live; written to the SD card, keeping
+//! the 5 most recent, as soon as the feed drops).
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
     fs::{self, File},
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -21,12 +23,20 @@ const BUFFER_DURATION: Duration = Duration::from_secs(30);
 /// Bound the ring buffer in bytes too, in case frames arrive far faster than
 /// expected; generous for any realistic goggles bitrate over 30 seconds.
 const BUFFER_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// How many auto-recorded flights to keep on the SD card; the oldest is
+/// deleted once a new one is saved beyond this count.
+const MAX_FLIGHTS: usize = 5;
 
 struct Active {
     file: File,
     name: String,
     started: Instant,
     bytes: u64,
+}
+/// A flight currently being buffered in RAM (tmpfs), not yet on the SD card.
+struct AutoRecording {
+    file: File,
+    tmp_path: PathBuf,
 }
 #[derive(Default)]
 struct Buffer {
@@ -66,11 +76,24 @@ impl Buffer {
 struct Inner {
     active: Option<Active>,
     buffer: Buffer,
+    auto: Option<AutoRecording>,
 }
 
-#[derive(Clone, Default)]
-pub struct Controller(Arc<Mutex<Inner>>);
+#[derive(Clone)]
+pub struct Controller {
+    inner: Arc<Mutex<Inner>>,
+    /// Under the runtime directory (tmpfs): gone on every reboot or power
+    /// loss, so cached thumbnails never accumulate on the SD card.
+    thumb_dir: PathBuf,
+}
 impl Controller {
+    pub fn new(thumb_dir: PathBuf) -> Self {
+        let _ = fs::create_dir_all(&thumb_dir);
+        Self {
+            inner: Arc::new(Mutex::new(Inner::default())),
+            thumb_dir,
+        }
+    }
     /// Start a new continuous recording. Fails without creating a file if
     /// there is already too little free space.
     pub fn start(&self, dir: &Path) -> anyhow::Result<Value> {
@@ -81,7 +104,7 @@ impl Controller {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let name = format!("recording-{stamp}.h264");
         let file = File::create(dir.join(&name))?;
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         inner.active = Some(Active {
             file,
             name: name.clone(),
@@ -92,7 +115,7 @@ impl Controller {
     }
     /// Stop the active recording, if any, and report how big it ended up.
     pub fn stop(&self) -> Option<Value> {
-        let active = self.0.lock().unwrap().active.take()?;
+        let active = self.inner.lock().unwrap().active.take()?;
         Some(json!({
             "name": active.name,
             "bytes": active.bytes,
@@ -100,7 +123,7 @@ impl Controller {
         }))
     }
     pub fn status(&self) -> Value {
-        match &self.0.lock().unwrap().active {
+        match &self.inner.lock().unwrap().active {
             Some(a) => json!({
                 "recording": true,
                 "name": a.name,
@@ -113,19 +136,48 @@ impl Controller {
     /// Feed one NAL unit from the live goggles stream: always into the
     /// rolling buffer, and into the active recording file if there is one.
     pub fn feed(&self, nal: &[u8]) {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         inner.buffer.push(nal);
         if let Some(active) = &mut inner.active
             && active.file.write_all(nal).is_ok()
         {
             active.bytes += nal.len() as u64;
         }
+        if let Some(auto) = &mut inner.auto {
+            let _ = auto.file.write_all(nal);
+        }
+    }
+    /// Keep auto-recording in sync with whether live input is currently
+    /// flowing, when the `auto_record` setting is on: starts buffering a
+    /// flight in `tmp_dir` (tmpfs) when input appears, and saves it to
+    /// `sd_dir` (pruned to the most recent `MAX_FLIGHTS`) as soon as input
+    /// stops. Cheap to call every tick either way.
+    pub fn auto_tick(&self, tmp_dir: &Path, sd_dir: &Path, enabled: bool, input_live: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        if !enabled {
+            if let Some(auto) = inner.auto.take() {
+                finalize_flight(auto, sd_dir);
+            }
+            return;
+        }
+        match (inner.auto.is_some(), input_live) {
+            (false, true) => {
+                if let Ok(auto) = start_auto_recording(tmp_dir) {
+                    inner.auto = Some(auto);
+                }
+            }
+            (true, false) => {
+                let auto = inner.auto.take().unwrap();
+                finalize_flight(auto, sd_dir);
+            }
+            _ => {}
+        }
     }
     /// Check free space while a recording is active; stop it and return a
     /// human-readable reason if it just dropped below the minimum. A no-op,
     /// cheap to call every tick, while nothing is recording.
     pub fn enforce_space(&self, dir: &Path) -> Option<String> {
-        self.0.lock().unwrap().active.as_ref()?;
+        self.inner.lock().unwrap().active.as_ref()?;
         if free_bytes(dir).is_some_and(|f| f >= MIN_FREE_BYTES) {
             return None;
         }
@@ -139,7 +191,7 @@ impl Controller {
     pub fn save_buffer(&self, dir: &Path) -> anyhow::Result<Value> {
         fs::create_dir_all(dir)?;
         let bytes = {
-            let inner = self.0.lock().unwrap();
+            let inner = self.inner.lock().unwrap();
             inner
                 .buffer
                 .snapshot()
@@ -149,6 +201,87 @@ impl Controller {
         let name = format!("clip-{stamp}.h264");
         crate::settings::atomic_write(&dir.join(&name), &bytes)?;
         Ok(json!({"name":name,"bytes":bytes.len()}))
+    }
+    /// List recordings, clips and saved flights in `dir`, generating any
+    /// thumbnail missing from the cache along the way (so the first list
+    /// after a new file appears is slower than later ones).
+    pub fn list(&self, dir: &Path) -> Vec<Value> {
+        let mut entries: Vec<_> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !valid_name(&name) {
+                    return None;
+                }
+                let meta = e.metadata().ok()?;
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+                let thumbnail = crate::storage::ensure_thumbnail(
+                    &e.path(),
+                    &self.thumb_dir.join(format!("{name}.jpg")),
+                );
+                Some(json!({"name":name,"size":meta.len(),"modified":modified,"thumbnail":thumbnail}))
+            })
+            .collect();
+        entries.sort_by(|a, b| b["modified"].as_u64().cmp(&a["modified"].as_u64()));
+        entries
+    }
+    /// The cached thumbnail for a recording, if one has been generated.
+    pub fn thumbnail(&self, name: &str) -> Option<PathBuf> {
+        let path = valid_name(name).then(|| self.thumb_dir.join(format!("{name}.jpg")))?;
+        path.exists().then_some(path)
+    }
+}
+
+/// Create a new tmpfs scratch file for a flight about to start.
+fn start_auto_recording(tmp_dir: &Path) -> std::io::Result<AutoRecording> {
+    fs::create_dir_all(tmp_dir)?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let tmp_path = tmp_dir.join(format!("flight-{stamp}.h264"));
+    let file = File::create(&tmp_path)?;
+    Ok(AutoRecording { file, tmp_path })
+}
+/// Copy a finished flight from the tmpfs scratch file to the SD card and
+/// prune older flights beyond `MAX_FLIGHTS`; always removes the scratch
+/// file, whether or not the copy succeeded.
+fn finalize_flight(auto: AutoRecording, sd_dir: &Path) {
+    drop(auto.file);
+    if fs::create_dir_all(sd_dir).is_ok() {
+        let name = auto
+            .tmp_path
+            .file_name()
+            .map(|n| sd_dir.join(n))
+            .filter(|_| fs::metadata(&auto.tmp_path).is_ok_and(|m| m.len() > 0));
+        if let Some(dest) = name
+            && fs::copy(&auto.tmp_path, &dest).is_ok()
+        {
+            prune_flights(sd_dir);
+        }
+    }
+    let _ = fs::remove_file(&auto.tmp_path);
+}
+fn prune_flights(dir: &Path) {
+    let mut flights: Vec<String> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.starts_with("flight-").then_some(name)
+        })
+        .collect();
+    // Nanosecond timestamps in the name sort chronologically as strings.
+    flights.sort();
+    for old in flights.iter().rev().skip(MAX_FLIGHTS) {
+        let _ = fs::remove_file(dir.join(old));
     }
 }
 
@@ -163,34 +296,12 @@ fn free_bytes(path: &Path) -> Option<u64> {
 }
 
 pub fn valid_name(name: &str) -> bool {
-    (name.starts_with("recording-") || name.starts_with("clip-"))
+    (name.starts_with("recording-") || name.starts_with("clip-") || name.starts_with("flight-"))
         && name.ends_with(".h264")
         && name.len() <= 64
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
-}
-pub fn list(dir: &Path) -> Vec<Value> {
-    let mut entries: Vec<_> = fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if !valid_name(&name) {
-                return None;
-            }
-            let meta = e.metadata().ok()?;
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs());
-            Some(json!({"name":name,"size":meta.len(),"modified":modified}))
-        })
-        .collect();
-    entries.sort_by(|a, b| b["modified"].as_u64().cmp(&a["modified"].as_u64()));
-    entries
 }
 pub fn remove(dir: &Path, name: &str) -> anyhow::Result<()> {
     anyhow::ensure!(valid_name(name), "Invalid recording name");
@@ -201,10 +312,28 @@ pub fn remove(dir: &Path, name: &str) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    fn scratch(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ungoggled-recording-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+    fn test_controller(label: &str) -> (Controller, PathBuf) {
+        let thumbs = scratch(&format!("{label}-thumbs"));
+        (Controller::new(thumbs), scratch(label))
+    }
+
     #[test]
     fn rejects_unsafe_or_unrecognized_names() {
         assert!(valid_name("recording-123.h264"));
         assert!(valid_name("clip-456.h264"));
+        assert!(valid_name("flight-789.h264"));
         assert!(!valid_name("../etc/passwd"));
         assert!(!valid_name("recording-123.mp4"));
         assert!(!valid_name("other-123.h264"));
@@ -212,10 +341,7 @@ mod tests {
 
     #[test]
     fn records_and_stops_on_demand() {
-        let dir =
-            std::env::temp_dir().join(format!("ungoggled-recording-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let c = Controller::default();
+        let (c, dir) = test_controller("start-stop");
         assert!(!c.status()["recording"].as_bool().unwrap());
         c.start(&dir).unwrap();
         assert!(c.status()["recording"].as_bool().unwrap());
@@ -229,20 +355,17 @@ mod tests {
             fs::read(dir.join(name)).unwrap(),
             [0, 0, 1, 0x67, 1, 2, 3, 0, 0, 1, 0x65, 4, 5]
         );
-        let listed = list(&dir);
+        let listed = c.list(&dir);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["name"], name);
         remove(&dir, name).unwrap();
-        assert!(list(&dir).is_empty());
+        assert!(c.list(&dir).is_empty());
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn buffer_snapshot_starts_at_the_first_sps() {
-        let dir =
-            std::env::temp_dir().join(format!("ungoggled-recording-buf-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let c = Controller::default();
+        let (c, dir) = test_controller("buffer");
         // A stray slice before any SPS must not appear in the saved clip.
         c.feed(&[0, 0, 1, 0x65, 0xaa]);
         c.feed(&[0, 0, 1, 0x67, 1, 2]);
@@ -260,9 +383,52 @@ mod tests {
 
     #[test]
     fn save_buffer_fails_cleanly_when_nothing_was_fed() {
-        let dir =
-            std::env::temp_dir().join(format!("ungoggled-recording-empty-{}", std::process::id()));
-        let c = Controller::default();
+        let (c, dir) = test_controller("empty-buffer");
         assert!(c.save_buffer(&dir).is_err());
+    }
+
+    #[test]
+    fn auto_record_saves_on_feed_loss_and_does_nothing_when_disabled() {
+        let (c, sd) = test_controller("auto");
+        let tmp = scratch("auto-tmp");
+        // Disabled: never starts, even with live input.
+        c.auto_tick(&tmp, &sd, false, true);
+        c.feed(&[0, 0, 1, 0x67, 1]);
+        assert!(c.list(&sd).is_empty());
+        // Enabled + live: starts buffering in the tmp dir, not the SD dir.
+        c.auto_tick(&tmp, &sd, true, true);
+        c.feed(&[0, 0, 1, 0x67, 1, 2]);
+        c.feed(&[0, 0, 1, 0x65, 3, 4]);
+        assert!(c.list(&sd).is_empty(), "still in tmp, not yet on sd_dir");
+        // Feed drops: the flight is saved to sd_dir.
+        c.auto_tick(&tmp, &sd, true, false);
+        let listed = c.list(&sd);
+        assert_eq!(listed.len(), 1);
+        let name = listed[0]["name"].as_str().unwrap().to_owned();
+        assert!(name.starts_with("flight-"));
+        assert_eq!(
+            fs::read(sd.join(&name)).unwrap(),
+            [0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x65, 3, 4]
+        );
+        // The tmp scratch file is cleaned up after saving.
+        assert!(fs::read_dir(&tmp).unwrap().next().is_none());
+        fs::remove_dir_all(&sd).unwrap();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn auto_record_prunes_to_the_most_recent_flights() {
+        let (c, sd) = test_controller("prune");
+        let tmp = scratch("prune-tmp");
+        fs::create_dir_all(&sd).unwrap();
+        for i in 0..(MAX_FLIGHTS + 2) {
+            c.auto_tick(&tmp, &sd, true, true);
+            c.feed(&[0, 0, 1, 0x67, i as u8]);
+            c.auto_tick(&tmp, &sd, true, false);
+        }
+        let listed = c.list(&sd);
+        assert_eq!(listed.len(), MAX_FLIGHTS);
+        fs::remove_dir_all(&sd).unwrap();
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

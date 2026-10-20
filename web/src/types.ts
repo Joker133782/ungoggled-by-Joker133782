@@ -75,6 +75,7 @@ export type Recording = {
   name: string;
   size: number;
   modified: number | null;
+  thumbnail: boolean;
 };
 export type UsbVideo = {
   id: string;

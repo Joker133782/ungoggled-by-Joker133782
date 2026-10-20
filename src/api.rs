@@ -73,6 +73,7 @@ pub fn router(app: App, web: std::path::PathBuf) -> Router {
             get(recording_file).delete(remove_recording),
         )
         .route("/api/recordings/{name}/play", post(play_recording))
+        .route("/api/recordings/{name}/thumbnail", get(recording_thumbnail))
         .route("/api/stream.ts", get(stream_ts))
         .layer(DefaultBodyLimit::max(assets::MAX_VIDEO_UPLOAD + 65536))
         .merge(crate::update::api::routes())
@@ -419,10 +420,26 @@ async fn save_recording_buffer(State(a): State<App>, h: HeaderMap) -> ApiResult<
 }
 async fn list_recordings(State(a): State<App>) -> Json<Value> {
     let dir = recordings_dir(&a);
-    let recordings = tokio::task::spawn_blocking(move || crate::recording::list(&dir))
+    let recordings = tokio::task::spawn_blocking(move || a.recording.list(&dir))
         .await
         .unwrap_or_default();
     Json(json!({"recordings":recordings}))
+}
+async fn recording_thumbnail(State(a): State<App>, Path(name): Path<String>) -> Response {
+    let Some(path) = a.recording.thumbnail(&name) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match tokio::task::spawn_blocking(move || std::fs::read(path)).await {
+        Ok(Ok(bytes)) => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 async fn recording_file(State(a): State<App>, Path(name): Path<String>) -> Response {
     if !crate::recording::valid_name(&name) {

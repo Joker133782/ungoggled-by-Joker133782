@@ -34,6 +34,11 @@ pub struct Settings {
     /// two viewers. `"event"`: transcode to a lower bitrate so the Pi's own
     /// Wi-Fi can carry more viewers at once, at reduced quality.
     pub stream_quality: String,
+    /// Buffer every live session (in RAM, under the runtime tmpfs) and save
+    /// it to the SD card as soon as the feed drops, keeping the 5 most
+    /// recent; no manual start/stop needed. The manual recording button
+    /// still works independently of this.
+    pub auto_record: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -49,6 +54,7 @@ impl Default for Settings {
             beep_until_time_synced: false,
             stream_enabled: false,
             stream_quality: "high".into(),
+            auto_record: false,
         }
     }
 }
@@ -238,6 +244,7 @@ pub fn migrate(data_dir: &Path, output: &Path) -> Result<Vec<String>> {
                 .filter(|v| valid_stream_quality(v))
                 .map(|v| next.stream_quality = v.into())
                 .is_some(),
+            "auto_record" => value.as_bool().map(|v| next.auto_record = v).is_some(),
             _ => false,
         };
         if !accepted {

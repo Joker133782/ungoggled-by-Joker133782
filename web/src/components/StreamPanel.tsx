@@ -53,13 +53,13 @@ export function StreamPanel({ disabled }: { disabled: boolean }) {
         for every connected viewer combined, shared with the web interface itself.
       </p>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <label>
+        <label className="toggle">
           <input
             type="checkbox"
             checked={settings.stream_enabled}
             disabled={disabled || busy}
             onChange={(e) => void save({ ...settings, stream_enabled: e.currentTarget.checked })}
-          />{" "}
+          />
           Enable spectator stream
         </label>
         <label>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, headers } from "../api";
-import type { Recording, RecordingStatus } from "../types";
+import type { Recording, RecordingStatus, Settings } from "../types";
 
 const bytes = (n: number) => {
   if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
@@ -16,8 +16,10 @@ const when = (s: number | null) =>
   s ? new Date(s * 1000).toLocaleString() : "unknown date";
 
 /**
- * Record the live goggles feed to the SD card (raw, no re-encoding), with a
- * "save the last 30 seconds" shortcut for moments you didn't plan to record.
+ * Record the live goggles feed to the SD card (raw, no re-encoding). Three
+ * independent ways to capture: auto-record every flight start to finish,
+ * manual start/stop, and a "save the last 30 seconds" shortcut for a moment
+ * you didn't plan to record.
  */
 export function RecordingPanel({
   diskWarning,
@@ -28,6 +30,7 @@ export function RecordingPanel({
 }) {
   const [status, setStatus] = useState<RecordingStatus | null>(null);
   const [recordings, setRecordings] = useState<Recording[] | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -39,9 +42,17 @@ export function RecordingPanel({
       /* Receiver may be restarting; the next poll retries. */
     }
   }, []);
+  const loadSettings = useCallback(async () => {
+    try {
+      setSettings(await api<Settings>("settings"));
+    } catch {
+      /* Receiver may be restarting; the next poll retries. */
+    }
+  }, []);
   useEffect(() => {
     void loadList();
-  }, [loadList]);
+    void loadSettings();
+  }, [loadList, loadSettings]);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -56,6 +67,20 @@ export function RecordingPanel({
     return () => clearTimeout(timer);
   }, []);
 
+  async function setAutoRecord(auto_record: boolean) {
+    if (!settings) return;
+    setBusy("auto");
+    setError("");
+    try {
+      const next = { ...settings, auto_record };
+      await api("settings", { method: "POST", headers, body: JSON.stringify(next) });
+      setSettings(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save.");
+    } finally {
+      setBusy(null);
+    }
+  }
   async function start() {
     setBusy("start");
     setError("");
@@ -124,11 +149,10 @@ export function RecordingPanel({
     <section className="panel recording">
       <h2>Recording</h2>
       <p className="help">
-        Records the live goggles feed to the SD card, unmodified (no
-        re-encoding). Stops on its own with at least 2 GB free space left. The
-        goggles' own on-screen display (battery, channel, signal) is part of the
-        recorded picture if the goggles have it turned on; that is set on the
-        goggles/DJI Fly, not here.
+        Everything here writes the live goggles feed to the SD card unmodified (no
+        re-encoding). The goggles' own on-screen display (battery, channel, signal) is part
+        of the picture if the goggles have it turned on; that is set on the goggles/DJI Fly,
+        not here.
       </p>
       {diskWarning && (
         <p role="alert" className="error">
@@ -136,6 +160,24 @@ export function RecordingPanel({
           <button disabled={disabled} onClick={() => void dismissWarning()}>
             dismiss
           </button>
+        </p>
+      )}
+      {settings && (
+        <p>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={settings.auto_record}
+              disabled={disabled || busy === "auto"}
+              onChange={(e) => void setAutoRecord(e.currentTarget.checked)}
+            />
+            Auto-record every flight
+          </label>
+          <span className="help">
+            {" "}
+            — buffers in RAM while the feed is live, saves to the SD card as soon as it
+            drops, keeps the 5 most recent flights (oldest deleted automatically).
+          </span>
         </p>
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -174,7 +216,16 @@ export function RecordingPanel({
         <ul className="recording-list">
           {recordings.map((r) => (
             <li key={r.name}>
-              <div>
+              {r.thumbnail ? (
+                <img
+                  className="usb-thumbnail"
+                  src={`/api/recordings/${r.name}/thumbnail`}
+                  alt=""
+                />
+              ) : (
+                <div className="usb-thumbnail usb-thumbnail-empty" aria-hidden="true" />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
                 {r.name}
                 <div className="help">
                   {when(r.modified)} · {bytes(r.size)}

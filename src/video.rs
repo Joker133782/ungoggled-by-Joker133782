@@ -301,6 +301,9 @@ pub fn start(
     let warning_image = args.video_socket.with_file_name("sd-card-full.png");
     let _ = std::fs::write(&warning_image, include_bytes!("../assets/sd-card-full.png"));
     let recordings_dir = store.dir.join("recordings");
+    // tmpfs: a flight in progress lives in RAM, not on the SD card, until it
+    // is finalized there once the feed drops.
+    let auto_record_dir = args.video_socket.with_file_name("auto-recording");
     let socket = UnixDatagram::bind(&args.video_socket)?;
     socket.set_read_timeout(Some(Duration::from_millis(200)))?;
     let (tx, rx) = mpsc::sync_channel::<Chunk>(1024);
@@ -481,6 +484,7 @@ pub fn start(
                     report(json!({"message":reason}));
                     *disk_warning.lock().unwrap() = Some(warning_image.clone());
                 }
+                recording.auto_tick(&auto_record_dir, &recordings_dir, current.auto_record, !input_gone);
             }
             let chunk = match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(c) => c,
@@ -569,6 +573,8 @@ pub fn start(
         drop(child);
         drop(display);
         stream.stop();
+        // Save a flight in progress rather than discard it on shutdown.
+        recording.auto_tick(&auto_record_dir, &recordings_dir, false, false);
         let _ = std::fs::remove_file(&args.video_socket);
     }))
 }

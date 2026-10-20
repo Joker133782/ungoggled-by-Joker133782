@@ -56,8 +56,9 @@ impl Store {
                     .into_owned();
                 let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 let thumbnail = ensure_thumbnail(&path, &self.thumb_dir.join(format!("{id}.jpg")));
+                let device = friendly_device_name(&drive.device).unwrap_or_else(|| drive.device.clone());
                 out.push(
-                    json!({"id":id,"name":name,"device":drive.device,"size":size,"thumbnail":thumbnail}),
+                    json!({"id":id,"name":name,"device":device,"size":size,"thumbnail":thumbnail}),
                 );
                 registry.insert(id, path);
             }
@@ -80,7 +81,7 @@ fn valid_id(id: &str) -> bool {
 /// Grab one frame as a small JPEG with GStreamer, caching it by id so a
 /// rescan only pays for videos it has not thumbnailed yet. Best-effort: a
 /// file GStreamer cannot demux just stays without a thumbnail.
-fn ensure_thumbnail(video: &Path, dest: &Path) -> bool {
+pub(crate) fn ensure_thumbnail(video: &Path, dest: &Path) -> bool {
     if dest.exists() {
         return true;
     }
@@ -220,6 +221,29 @@ fn is_removable(name: &str) -> bool {
     let own = fs::read_to_string(format!("/sys/class/block/{name}/removable"));
     let parent = fs::read_to_string(format!("/sys/class/block/{name}/../removable"));
     own.or(parent).is_ok_and(|s| s.trim() == "1")
+}
+/// The USB device's own descriptor strings (e.g. "DJI DJIAction2"), not the
+/// SCSI/USB-storage gadget's INQUIRY vendor/model, which many cameras leave
+/// as a generic "Linux File-Stor Gadget". Walks up from the block device's
+/// `/sys/block/<disk>/device` symlink to the ancestor that carries
+/// `manufacturer`/`product` files, i.e. the actual USB device node.
+fn friendly_device_name(device: &str) -> Option<String> {
+    let disk = device.trim_end_matches(|c: char| c.is_ascii_digit());
+    let real = fs::canonicalize(format!("/sys/block/{disk}/device")).ok()?;
+    real.ancestors().find_map(|dir| {
+        let product = fs::read_to_string(dir.join("product")).ok()?;
+        let product = product.trim();
+        if product.is_empty() {
+            return None;
+        }
+        let manufacturer = fs::read_to_string(dir.join("manufacturer")).ok();
+        Some(match manufacturer {
+            Some(m) if !product.starts_with(m.trim()) && !m.trim().is_empty() => {
+                format!("{} {product}", m.trim())
+            }
+            _ => product.to_owned(),
+        })
+    })
 }
 /// The whole-disk device backing `/`, plus any of its partitions, by prefix.
 fn root_devices() -> Vec<String> {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.10
+
+- Recording: new "Auto-record every flight" toggle, buffering each live session in RAM (tmpfs) and saving it to the SD card as soon as the feed drops, keeping the 5 most recent flights. Manual start/stop recording stays available independently.
+- Recording: saved files now get the same cached thumbnail treatment as USB videos, with download/delete/play-on-HDMI in one list.
+- USB videos: list the camera's actual product name (e.g. "DJI DJIAction2"), not the raw Linux block device name (e.g. "sdc"), read from the USB device's own descriptor strings rather than the often-generic SCSI INQUIRY vendor/model.
+- Checkboxes across the web interface (preview, beeper/LEDs, spectator stream, auto-record) now render as a green/red toggle switch instead of a native checkbox — one shared CSS rule, since every checkbox already used the same wrapper.
+- Fixed USB-video thumbnails for real action-cam footage: found by testing against a DJI Action 2 over USB passthrough (see below) rather than only synthetic clips. A caps filter with only `width=` let `videoscale` leave height unchanged and rewrite the pixel-aspect-ratio to compensate instead of actually resizing, invisible at 16:9 but turning a real 4:3 4096x3072 recording into a 160x3072 thumbnail; fixed by forcing `pixel-aspect-ratio=1/1`. Also raised the generation timeout from 5s to 30s: a real 3.7 GB 4K60 HEVC clip took about 20s for GStreamer to read and index before decoding anything.
+
 ## 0.3.9
 
 - Experimental spectator stream: phones/tablets on the Pi's own Wi-Fi can watch the live feed in a browser at `/watch.html`, separate from the HDMI output. MPEG-TS over a long-lived HTTP connection, decoded client-side with mpegts.js — real H.264, much lower latency than HLS. Toggle and quality ("High", relayed unmodified, ~1-2 viewers; "Event", transcoded lower-bitrate for more viewers) configurable in the web interface under **Spectator stream**, with the actual Wi-Fi bandwidth trade-off explained there. Verified end-to-end in a real browser against synthetic test video.

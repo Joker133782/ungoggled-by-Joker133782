@@ -101,21 +101,34 @@ decode. Not hardware-verified.
 
 ## Recording (experimental)
 
-Records the live goggles feed to the SD card exactly as received (no
-re-encoding), started and stopped from the web interface under
-**Recording**. Stops itself, and refuses to start, with less than 2 GB of
-free space left on the SD card; the HDMI output then shows a "SD card
-full" notice once the goggles feed itself stops (it never interrupts a
-live picture just to show that). A separate, always-on ~30-second ring
-buffer lets **Save last 30 seconds** capture a moment you did not plan to
-record, without having had recording running.
+Three independent ways to capture the live goggles feed to the SD card
+exactly as received (no re-encoding), all listed together under
+**Recording** in the web interface, with download, deletion, and playback
+on the HDMI output, each with a thumbnail:
 
-Recordings and saved clips are listed in the web interface for download,
-deletion, or playback on the HDMI output. The goggles' own on-screen
-display (battery, channel, signal bars) is part of the picture whenever
-the goggles themselves are configured to add it to the output, so it is
-part of a recording the same way; that is a setting on the goggles/DJI
-Fly, not something the Pi controls. Not hardware-verified.
+- **Auto-record every flight**: a toggle. While on, every live session is
+  buffered in RAM (under the runtime tmpfs, not the SD card) for as long as
+  the feed lasts, and saved to the SD card the moment the feed drops — no
+  start/stop needed. Keeps the 5 most recent flights; the oldest is deleted
+  automatically once a new one is saved.
+- **Start recording** / **Stop recording**: manual, writes straight to the
+  SD card as it records, independent of the auto-record toggle above (both
+  can run at once).
+- **Save last 30 seconds**: always running in the background at low memory
+  cost; captures a moment you did not plan to record, on demand.
+
+Manual and auto-recording both stop themselves, and auto-recording's save
+is skipped, with less than 2 GB of free space left on the SD card; the
+HDMI output then shows a "SD card full" notice once the goggles feed
+itself stops (it never interrupts a live picture just to show that).
+
+The goggles' own on-screen display (battery, channel, signal bars) is part
+of the picture whenever the goggles themselves are configured to add it to
+the output, so it is part of a recording the same way; that is a setting
+on the goggles/DJI Fly, not something the Pi controls. Not
+hardware-verified for the auto-record/RAM-buffer path specifically (the
+manual recording and USB-video thumbnail pipeline it shares code with have
+been, against real action-cam footage).
 
 ## Spectator stream (experimental)
 
