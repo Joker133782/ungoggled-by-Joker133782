@@ -182,6 +182,16 @@ fn reconcile(base: &Path, mounted: &Arc<Mutex<Vec<Mounted>>>) {
             continue;
         }
         let mountpoint = base.join(&device);
+        // Already mounted from a previous run that did not unmount cleanly
+        // (an unclean shutdown, e.g.): adopt it rather than trying to mount
+        // over it, which would just fail and leave the device untracked.
+        if let Some(existing) = existing_mountpoint(&device) {
+            guard.push(Mounted {
+                device,
+                mountpoint: existing,
+            });
+            continue;
+        }
         if fs::create_dir_all(&mountpoint).is_err() {
             continue;
         }
@@ -198,6 +208,21 @@ fn reconcile(base: &Path, mounted: &Arc<Mutex<Vec<Mounted>>>) {
             let _ = fs::remove_dir(&mountpoint);
         }
     }
+}
+/// Where `/dev/<device>` is already mounted, per the kernel's own mount
+/// table, if anywhere.
+fn existing_mountpoint(device: &str) -> Option<PathBuf> {
+    let target = format!("/dev/{device}");
+    fs::read_to_string("/proc/mounts")
+        .ok()?
+        .lines()
+        .find_map(|l| {
+            let mut parts = l.split_whitespace();
+            if parts.next()? != target {
+                return None;
+            }
+            parts.next().map(PathBuf::from)
+        })
 }
 fn unmount(m: &Mounted) {
     let _ = Command::new("umount").arg(&m.mountpoint).output();

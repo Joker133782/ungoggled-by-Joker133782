@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.11
+
+- Fix USB videos not appearing after an unclean restart: found by testing real restarts against a real mounted action cam over USB passthrough. A device already mounted from a previous run that did not unmount cleanly made the next mount attempt fail (already mounted) and silently left the device untracked, so it never showed up in the list even though it was reachable on disk. Now adopts an existing mount for a device instead of trying to mount over it.
+
 ## 0.3.10
 
 - Recording: new "Auto-record every flight" toggle, buffering each live session in RAM (tmpfs) and saving it to the SD card as soon as the feed drops, keeping the 5 most recent flights. Manual start/stop recording stays available independently.
