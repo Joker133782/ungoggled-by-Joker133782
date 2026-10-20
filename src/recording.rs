@@ -230,7 +230,7 @@ mod tests {
         c.feed(&[0, 0, 1, 0x67, 1, 2, 3]);
         c.feed(&[0, 0, 1, 0x65, 4, 5]);
         let summary = c.stop().unwrap();
-        assert_eq!(summary["bytes"], 12);
+        assert_eq!(summary["bytes"], 13);
         assert!(!c.status()["recording"].as_bool().unwrap());
         let name = summary["name"].as_str().unwrap();
         assert_eq!(
