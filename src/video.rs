@@ -293,6 +293,7 @@ pub fn start(
     usb_playback: Arc<Mutex<Option<std::path::PathBuf>>>,
     recording: crate::recording::Controller,
     disk_warning: Arc<Mutex<Option<std::path::PathBuf>>>,
+    stream: crate::stream::Controller,
 ) -> anyhow::Result<thread::JoinHandle<()>> {
     if args.video_socket.exists() {
         std::fs::remove_file(&args.video_socket)?;
@@ -336,6 +337,11 @@ pub fn start(
                 annex = Default::default();
                 *preview.lock().unwrap() = None;
                 prepare_at = Instant::now() - Duration::from_secs(5);
+            }
+            if current.stream_enabled {
+                stream.ensure(crate::stream::Quality::parse(&current.stream_quality));
+            } else if stream.running() {
+                stream.stop();
             }
             if display.as_ref().is_some_and(|d| d.needs_upgrade()) {
                 child = None;
@@ -513,6 +519,7 @@ pub fn start(
                 // Independent of the live decoder's own state: record exactly
                 // what the goggles send, including through a decoder restart.
                 recording.feed(&nal);
+                stream.feed(&nal);
                 if matches!(nal.get(3).map(|v| v & 31), Some(1 | 5))
                     && nal.get(4).is_some_and(|v| v & 0x80 != 0)
                 {
@@ -561,6 +568,7 @@ pub fn start(
         drop(fallback);
         drop(child);
         drop(display);
+        stream.stop();
         let _ = std::fs::remove_file(&args.video_socket);
     }))
 }

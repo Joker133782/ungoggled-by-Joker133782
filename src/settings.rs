@@ -26,6 +26,14 @@ pub struct Settings {
     pub hdmi_led_pin: Option<u8>,
     /// Beep every few seconds until the clock has been synced once since boot.
     pub beep_until_time_synced: bool,
+    /// Relay the live feed over the Wi-Fi access point for spectators, at
+    /// `stream_quality`. Off by default: this is a deliberate, operator-set
+    /// choice, not something that starts on its own.
+    pub stream_enabled: bool,
+    /// `"high"`: relay the original goggles stream unmodified, for one or
+    /// two viewers. `"event"`: transcode to a lower bitrate so the Pi's own
+    /// Wi-Fi can carry more viewers at once, at reduced quality.
+    pub stream_quality: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -39,6 +47,8 @@ impl Default for Settings {
             video_led_pin: Some(crate::hardware::DEFAULT_VIDEO_LED_PIN),
             hdmi_led_pin: Some(crate::hardware::DEFAULT_HDMI_LED_PIN),
             beep_until_time_synced: false,
+            stream_enabled: false,
+            stream_quality: "high".into(),
         }
     }
 }
@@ -79,6 +89,9 @@ impl Store {
     pub fn save(&self, value: Settings) -> Result<()> {
         if !valid_mode(&value.hdmi_mode) {
             bail!("Invalid HDMI mode");
+        }
+        if !valid_stream_quality(&value.stream_quality) {
+            bail!("Invalid stream quality");
         }
         if let Some(id) = &value.fallback_image
             && (!valid_id(id) || !self.dir.join("images").join(id).is_file())
@@ -121,6 +134,9 @@ pub fn valid_id(id: &str) -> bool {
 }
 pub fn valid_pin(pin: u8) -> bool {
     (2..=27).contains(&pin)
+}
+pub fn valid_stream_quality(quality: &str) -> bool {
+    matches!(quality, "high" | "event")
 }
 pub fn valid_mode(mode: &str) -> bool {
     if mode == "auto" {
@@ -215,6 +231,12 @@ pub fn migrate(data_dir: &Path, output: &Path) -> Result<Vec<String>> {
             "beep_until_time_synced" => value
                 .as_bool()
                 .map(|v| next.beep_until_time_synced = v)
+                .is_some(),
+            "stream_enabled" => value.as_bool().map(|v| next.stream_enabled = v).is_some(),
+            "stream_quality" => value
+                .as_str()
+                .filter(|v| valid_stream_quality(v))
+                .map(|v| next.stream_quality = v.into())
                 .is_some(),
             _ => false,
         };

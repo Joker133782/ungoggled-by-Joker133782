@@ -117,6 +117,35 @@ the goggles themselves are configured to add it to the output, so it is
 part of a recording the same way; that is a setting on the goggles/DJI
 Fly, not something the Pi controls. Not hardware-verified.
 
+## Spectator stream (experimental)
+
+Lets phones and tablets connected to the Pi's own Wi-Fi watch the live feed
+in a plain browser, at `/watch.html`, separately from the HDMI output. This
+is not the goggles' own low-latency link the pilot flies with — only
+something extra for bystanders, with a latency of a second or two. Off by
+default; turn it on under **Spectator stream**, with a quality choice:
+**High** relays the original goggles stream unmodified (close to the HDMI
+picture, but only realistic for one or two viewers at once, since every
+viewer costs roughly that much of the Pi's own Wi-Fi bandwidth); **Event**
+decodes and re-encodes at a lower resolution and bitrate in software, to let
+the Pi's own Wi-Fi carry more simultaneous viewers at reduced quality. No
+protocol choice changes that trade-off between viewer count and quality:
+the Pi's own Wi-Fi radio is the actual limit (roughly 50–100 Mbit/s total,
+shared with the web interface itself), not the streaming method.
+
+Delivered as MPEG-TS over one long-lived HTTP connection, decoded in the
+browser with [mpegts.js](https://github.com/xqq/mpegts.js) (loaded from a
+CDN), not HLS: HLS's segment files add several seconds of latency that
+cannot be configured away, which defeats the point for live FPV spectating.
+The GStreamer muxing pipeline and `mpegts.js` playback were verified
+end-to-end in a real browser against synthetic test video; not against the
+live goggles feed on real hardware. **Event** quality additionally needs
+`gstreamer1.0-plugins-ugly` (for its software H.264 encoder), which is not
+yet offered as an offline-installable update bundle the way mpv is — a Pi
+on an older image needs `apt install gstreamer1.0-plugins-ugly` for that
+quality level specifically; **High** quality needs nothing beyond what
+every image already has.
+
 ## Hardware and wiring
 
 You need a Raspberry Pi 4, microSD card of at least 8 GB, a USB-C data cable,

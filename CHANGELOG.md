@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.9
+
+- Experimental spectator stream: phones/tablets on the Pi's own Wi-Fi can watch the live feed in a browser at `/watch.html`, separate from the HDMI output. MPEG-TS over a long-lived HTTP connection, decoded client-side with mpegts.js — real H.264, much lower latency than HLS. Toggle and quality ("High", relayed unmodified, ~1-2 viewers; "Event", transcoded lower-bitrate for more viewers) configurable in the web interface under **Spectator stream**, with the actual Wi-Fi bandwidth trade-off explained there. Verified end-to-end in a real browser against synthetic test video.
+
 ## 0.3.8
 
 - Experimental: record the live goggles feed to the SD card (no re-encoding), started/stopped from the web interface, plus a "save last 30 seconds" shortcut backed by an always-on ring buffer. Stops itself, and won't start, below 2 GB free space; the HDMI output shows a "SD card full" notice once the goggles feed stops, without interrupting a live picture to show it. Recordings list in the web interface for download, deletion, or playback on the HDMI output.

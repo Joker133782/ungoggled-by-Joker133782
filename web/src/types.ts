@@ -47,6 +47,8 @@ export type Settings = {
   video_led_pin: number | null;
   hdmi_led_pin: number | null;
   beep_until_time_synced: boolean;
+  stream_enabled: boolean;
+  stream_quality: string;
 };
 export type ImageEntry = {
   id: string;

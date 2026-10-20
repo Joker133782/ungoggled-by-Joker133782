@@ -709,6 +709,9 @@ footer {
 .recording {
   margin-top: 16px;
 }
+.stream {
+  margin-top: 16px;
+}
 .recording-list {
   list-style: none;
   padding: 0;

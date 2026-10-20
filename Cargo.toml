@@ -1,6 +1,6 @@
 [package]
 name = "ungoggled"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2024"
 license = "MIT"
 
@@ -19,7 +19,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 nusb = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "process", "signal", "time", "fs", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "process", "signal", "time", "fs", "io-util", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["fs"] }
 
 [profile.release]

@@ -14,6 +14,7 @@ mod recording;
 mod session;
 mod settings;
 mod storage;
+mod stream;
 mod update;
 mod v1v2;
 mod video;
@@ -169,6 +170,7 @@ struct App {
     /// Overrides the configured fallback image (e.g. with a "SD card full"
     /// notice) until the next successful recording start or dismissal.
     disk_warning: Arc<Mutex<Option<PathBuf>>>,
+    stream: stream::Controller,
 }
 
 #[tokio::main]
@@ -252,6 +254,7 @@ async fn main() -> Result<()> {
                 usb_mpv_socket,
                 recording: recording::Controller::default(),
                 disk_warning: Arc::new(Mutex::new(None)),
+                stream: stream::Controller::default(),
             };
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             let observed = app.clone();
@@ -265,6 +268,7 @@ async fn main() -> Result<()> {
                 app.usb_playback.clone(),
                 app.recording.clone(),
                 app.disk_warning.clone(),
+                app.stream.clone(),
             )?;
             let supervisor = supervise(app.clone(), worker);
             let hardware_status = app.clone();

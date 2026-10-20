@@ -1,7 +1,7 @@
 use crate::{App, assets, settings, wifi};
 use axum::{
     Json, Router,
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
@@ -73,6 +73,7 @@ pub fn router(app: App, web: std::path::PathBuf) -> Router {
             get(recording_file).delete(remove_recording),
         )
         .route("/api/recordings/{name}/play", post(play_recording))
+        .route("/api/stream.ts", get(stream_ts))
         .layer(DefaultBodyLimit::max(assets::MAX_VIDEO_UPLOAD + 65536))
         .merge(crate::update::api::routes())
         .fallback_service(ServeDir::new(web))
@@ -507,4 +508,18 @@ async fn save_wifi(
     Ok(Json(
         json!({"accepted":true,"message":"Wi-Fi changes in two seconds. Reconnect using the new credentials."}),
     ))
+}
+/// MPEG-TS for the spectator page (`/watch.html`) over one long-lived HTTP
+/// connection; each connected viewer gets its own copy from the one relay
+/// `stream::Controller` runs, not a separate encode per viewer.
+async fn stream_ts(State(a): State<App>) -> Response {
+    let Some(rx) = a.stream.subscribe() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Streaming is turned off in the web interface",
+        )
+            .into_response();
+    };
+    let body = Body::from_stream(tokio_stream::wrappers::BroadcastStream::new(rx));
+    ([(header::CONTENT_TYPE, "video/mp2t")], body).into_response()
 }

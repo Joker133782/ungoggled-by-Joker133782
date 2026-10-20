@@ -11,6 +11,7 @@ import { WifiPanel } from "./components/WifiPanel";
 import { HardwarePanel } from "./components/HardwarePanel";
 import { UsbVideos } from "./components/UsbVideos";
 import { RecordingPanel } from "./components/Recording";
+import { StreamPanel } from "./components/StreamPanel";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 const phases: Record<string, string> = {
   streaming: "Receiving video",
@@ -596,6 +597,7 @@ export default function App() {
         diskWarning={status?.disk_warning}
         disabled={updateBusy}
       />
+      <StreamPanel disabled={updateBusy} />
       <UsbVideos disabled={updateBusy} />
       <details className="panel diagnostics">
         <summary>Diagnostics</summary>
