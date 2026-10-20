@@ -287,10 +287,18 @@ pub fn start(
     preview: Preview,
     shutdown: Arc<AtomicBool>,
     usb_playback: Arc<Mutex<Option<std::path::PathBuf>>>,
+    recording: crate::recording::Controller,
+    disk_warning: Arc<Mutex<Option<std::path::PathBuf>>>,
 ) -> anyhow::Result<thread::JoinHandle<()>> {
     if args.video_socket.exists() {
         std::fs::remove_file(&args.video_socket)?;
     }
+    let warning_image = args.video_socket.with_file_name("sd-card-full.png");
+    let _ = std::fs::write(
+        &warning_image,
+        include_bytes!("../assets/sd-card-full.png"),
+    );
+    let recordings_dir = store.dir.join("recordings");
     let socket = UnixDatagram::bind(&args.video_socket)?;
     socket.set_read_timeout(Some(Duration::from_millis(200)))?;
     let (tx, rx) = mpsc::sync_channel::<Chunk>(1024);
@@ -316,6 +324,7 @@ pub fn start(
         let mut stats_at = Instant::now();
         let mut frames = 0_u64;
         let mut starts = 0_u64;
+        let mut shown_warning: Option<std::path::PathBuf> = None;
         while !shutdown.load(Ordering::Relaxed) {
             let settings = store.get();
             if settings != current {
@@ -332,17 +341,31 @@ pub fn start(
                 fallback = None;
                 display = None;
             }
+            // Swap in the "SD card full" notice (or swap it back out) only
+            // once there is no live input to glitch; rebuilding the display
+            // while the goggles are still streaming would briefly interrupt
+            // the live picture just to change what's underneath it.
+            let warning = disk_warning.lock().unwrap().clone();
+            let input_gone_now =
+                last_input.is_none_or(|t| t.elapsed() > Duration::from_millis(1500));
+            if input_gone_now && warning != shown_warning {
+                display = None;
+                prepare_at = Instant::now() - Duration::from_secs(5);
+                shown_warning = warning;
+            }
             if args.output == "hdmi"
                 && display.is_none()
                 && prepare_at.elapsed() > Duration::from_secs(3)
             {
                 prepare_at = Instant::now();
                 // A fallback video plays on the overlay; the primary plane stays dark.
-                let image = current
-                    .fallback_image
-                    .as_ref()
-                    .filter(|id| !crate::assets::is_video_id(id))
-                    .map(|id| store.dir.join("images").join(id));
+                let image = shown_warning.clone().or_else(|| {
+                    current
+                        .fallback_image
+                        .as_ref()
+                        .filter(|id| !crate::assets::is_video_id(id))
+                        .map(|id| store.dir.join("images").join(id))
+                });
                 match crate::display::Display::prepare(
                     args.connector,
                     &current.hdmi_mode,
@@ -447,6 +470,10 @@ pub fn start(
                 report(json!({"input_fps":frames as f64/stats_at.elapsed().as_secs_f64()}));
                 stats_at = Instant::now();
                 frames = 0;
+                if let Some(reason) = recording.enforce_space(&recordings_dir) {
+                    report(json!({"message":reason}));
+                    *disk_warning.lock().unwrap() = Some(warning_image.clone());
+                }
             }
             let chunk = match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(c) => c,
@@ -482,6 +509,9 @@ pub fn start(
                 }
             };
             for nal in units {
+                // Independent of the live decoder's own state: record exactly
+                // what the goggles send, including through a decoder restart.
+                recording.feed(&nal);
                 if matches!(nal.get(3).map(|v| v & 31), Some(1 | 5))
                     && nal.get(4).is_some_and(|v| v & 0x80 != 0)
                 {

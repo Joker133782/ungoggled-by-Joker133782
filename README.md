@@ -99,6 +99,24 @@ whatever the Pi's mpv/ffmpeg install can decode for it, so very high
 resolutions or HEVC clips may not play smoothly without working hardware
 decode. Not hardware-verified.
 
+## Recording (experimental)
+
+Records the live goggles feed to the SD card exactly as received (no
+re-encoding), started and stopped from the web interface under
+**Recording**. Stops itself, and refuses to start, with less than 2 GB of
+free space left on the SD card; the HDMI output then shows a "SD card
+full" notice once the goggles feed itself stops (it never interrupts a
+live picture just to show that). A separate, always-on ~30-second ring
+buffer lets **Save last 30 seconds** capture a moment you did not plan to
+record, without having had recording running.
+
+Recordings and saved clips are listed in the web interface for download,
+deletion, or playback on the HDMI output. The goggles' own on-screen
+display (battery, channel, signal bars) is part of the picture whenever
+the goggles themselves are configured to add it to the output, so it is
+part of a recording the same way; that is a setting on the goggles/DJI
+Fly, not something the Pi controls. Not hardware-verified.
+
 ## Hardware and wiring
 
 You need a Raspberry Pi 4, microSD card of at least 8 GB, a USB-C data cable,

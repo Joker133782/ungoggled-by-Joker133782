@@ -57,6 +57,19 @@ pub fn router(app: App, web: std::path::PathBuf) -> Router {
         .route("/api/usb-videos/stop", post(stop_usb_video))
         .route("/api/usb-videos/{id}/play", post(play_usb_video))
         .route("/api/usb-videos/{id}/thumbnail", get(usb_video_thumbnail))
+        .route("/api/recording", get(recording_status).post(start_recording))
+        .route("/api/recording/stop", post(stop_recording))
+        .route("/api/recording/save-buffer", post(save_recording_buffer))
+        .route(
+            "/api/recording/dismiss-warning",
+            post(dismiss_recording_warning),
+        )
+        .route("/api/recordings", get(list_recordings))
+        .route(
+            "/api/recordings/{name}",
+            get(recording_file).delete(remove_recording),
+        )
+        .route("/api/recordings/{name}/play", post(play_recording))
         .layer(DefaultBodyLimit::max(assets::MAX_VIDEO_UPLOAD + 65536))
         .merge(crate::update::api::routes())
         .fallback_service(ServeDir::new(web))
@@ -362,6 +375,100 @@ async fn seek_usb_video(
     .await
     .map_err(bad)?
     .map_err(bad)?;
+    Ok(Json(json!({"accepted":true})))
+}
+fn recordings_dir(a: &App) -> std::path::PathBuf {
+    a.settings.dir.join("recordings")
+}
+async fn recording_status(State(a): State<App>) -> Json<Value> {
+    Json(a.recording.status())
+}
+async fn start_recording(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    let dir = recordings_dir(&a);
+    let result = tokio::task::spawn_blocking(move || a.recording.start(&dir))
+        .await
+        .map_err(bad)?
+        .map_err(bad)?;
+    *a.disk_warning.lock().unwrap() = None;
+    Ok(Json(result))
+}
+async fn stop_recording(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    Ok(Json(
+        a.recording.stop().unwrap_or(json!({"recording":false})),
+    ))
+}
+async fn dismiss_recording_warning(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    *a.disk_warning.lock().unwrap() = None;
+    Ok(Json(json!({"accepted":true})))
+}
+async fn save_recording_buffer(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    let dir = recordings_dir(&a);
+    let result = tokio::task::spawn_blocking(move || a.recording.save_buffer(&dir))
+        .await
+        .map_err(bad)?
+        .map_err(bad)?;
+    Ok(Json(result))
+}
+async fn list_recordings(State(a): State<App>) -> Json<Value> {
+    let dir = recordings_dir(&a);
+    let recordings =
+        tokio::task::spawn_blocking(move || crate::recording::list(&dir))
+            .await
+            .unwrap_or_default();
+    Json(json!({"recordings":recordings}))
+}
+async fn recording_file(State(a): State<App>, Path(name): Path<String>) -> Response {
+    if !crate::recording::valid_name(&name) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let path = recordings_dir(&a).join(&name);
+    match tokio::task::spawn_blocking(move || std::fs::read(path)).await {
+        Ok(Ok(bytes)) => (
+            [
+                (header::CONTENT_TYPE, "video/h264".to_owned()),
+                (header::CACHE_CONTROL, "private, max-age=3600".to_owned()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{name}\""),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+async fn remove_recording(
+    State(a): State<App>,
+    h: HeaderMap,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    let dir = recordings_dir(&a);
+    tokio::task::spawn_blocking(move || crate::recording::remove(&dir, &name))
+        .await
+        .map_err(bad)?
+        .map_err(bad)?;
+    Ok(Json(json!({"deleted":true})))
+}
+async fn play_recording(
+    State(a): State<App>,
+    h: HeaderMap,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    guard(&h)?;
+    if !crate::recording::valid_name(&name) {
+        return Err(bad("Invalid recording"));
+    }
+    let path = recordings_dir(&a).join(&name);
+    if !path.is_file() {
+        return Err(bad("Unknown recording"));
+    }
+    *a.usb_playback.lock().unwrap() = Some(path);
     Ok(Json(json!({"accepted":true})))
 }
 async fn get_wifi(State(a): State<App>) -> Json<Value> {

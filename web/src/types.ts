@@ -35,6 +35,7 @@ export type Status = {
   fallback_video?: boolean;
   goggles_protocol?: "goggles3" | "goggles2";
   goggles_protocol_state?: "probing" | "video" | "forced";
+  disk_warning?: boolean;
 };
 export type Settings = {
   hdmi_mode: string;
@@ -62,6 +63,17 @@ export type Sample = {
   hdmi: string;
 };
 export type History = { now: number; samples: Sample[] };
+export type RecordingStatus = {
+  recording: boolean;
+  name?: string;
+  bytes?: number;
+  seconds?: number;
+};
+export type Recording = {
+  name: string;
+  size: number;
+  modified: number | null;
+};
 export type UsbVideo = {
   id: string;
   name: string;

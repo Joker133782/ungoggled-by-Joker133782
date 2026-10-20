@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8
+
+- Experimental: record the live goggles feed to the SD card (no re-encoding), started/stopped from the web interface, plus a "save last 30 seconds" shortcut backed by an always-on ring buffer. Stops itself, and won't start, below 2 GB free space; the HDMI output shows a "SD card full" notice once the goggles feed stops, without interrupting a live picture to show it. Recordings list in the web interface for download, deletion, or playback on the HDMI output.
+
 ## 0.3.7
 
 - The update file now carries mpv's `.deb` packages and installs them offline after a successful update, so a Pi on an older release picks up USB-drive video playback automatically without needing internet on the Pi or a manual `apt install`. Best-effort: installing the packages never affects the rest of the update, succeeded or failed.

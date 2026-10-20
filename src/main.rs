@@ -10,6 +10,7 @@ mod h264;
 mod hardware;
 mod history;
 mod protocol;
+mod recording;
 mod session;
 mod settings;
 mod storage;
@@ -164,6 +165,10 @@ struct App {
     usb_playback: Arc<Mutex<Option<PathBuf>>>,
     /// Where mpv's IPC socket lives while a USB video plays.
     usb_mpv_socket: PathBuf,
+    recording: recording::Controller,
+    /// Overrides the configured fallback image (e.g. with a "SD card full"
+    /// notice) until the next successful recording start or dismissal.
+    disk_warning: Arc<Mutex<Option<PathBuf>>>,
 }
 
 #[tokio::main]
@@ -245,6 +250,8 @@ async fn main() -> Result<()> {
                 storage,
                 usb_playback: Arc::new(Mutex::new(None)),
                 usb_mpv_socket,
+                recording: recording::Controller::default(),
+                disk_warning: Arc::new(Mutex::new(None)),
             };
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             let observed = app.clone();
@@ -256,6 +263,8 @@ async fn main() -> Result<()> {
                 app.preview.clone(),
                 app.shutdown.clone(),
                 app.usb_playback.clone(),
+                app.recording.clone(),
+                app.disk_warning.clone(),
             )?;
             let supervisor = supervise(app.clone(), worker);
             let hardware_status = app.clone();
@@ -331,6 +340,7 @@ impl App {
                 .and_then(functionfs::udc_state)
         );
         s["build_id"] = json!(update::running_build());
+        s["disk_warning"] = json!(self.disk_warning.lock().unwrap().is_some());
         if let Some(clock) = clock::now() {
             s["time_unix_ms"] = json!(clock.unix_ms);
             s["time"] = json!(clock.display());

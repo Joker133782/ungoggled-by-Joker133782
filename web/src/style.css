@@ -706,6 +706,23 @@ footer {
   padding: 10px 0;
   border-top: 1px solid #303844;
 }
+.recording {
+  margin-top: 16px;
+}
+.recording-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+}
+.recording-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: 1px solid #303844;
+}
 .usb-thumbnail {
   width: 64px;
   height: 36px;
