@@ -24,7 +24,6 @@ const BUFFER_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 struct Active {
     file: File,
-    path: PathBuf,
     name: String,
     started: Instant,
     bytes: u64,
@@ -88,12 +87,10 @@ impl Controller {
         }
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let name = format!("recording-{stamp}.h264");
-        let path = dir.join(&name);
-        let file = File::create(&path)?;
+        let file = File::create(dir.join(&name))?;
         let mut inner = self.0.lock().unwrap();
         inner.active = Some(Active {
             file,
-            path,
             name: name.clone(),
             started: Instant::now(),
             bytes: 0,
