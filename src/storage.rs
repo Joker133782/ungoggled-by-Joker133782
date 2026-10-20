@@ -94,7 +94,10 @@ fn ensure_thumbnail(video: &Path, dest: &Path) -> bool {
         crate::video::quote_gst(&tmp.to_string_lossy())
     );
     let ok = Command::new("timeout")
-        .args(["5", "gst-launch-1.0"])
+        // A multi-GB action-cam file can take a while just for decodebin to
+        // read and index its moov atom, well before any frame is decoded;
+        // seen taking ~20s for a real 3.7 GB 4K60 HEVC clip.
+        .args(["30", "gst-launch-1.0"])
         .args([
             "filesrc",
             &location,
@@ -108,7 +111,11 @@ fn ensure_thumbnail(video: &Path, dest: &Path) -> bool {
             "!",
             "videoscale",
             "!",
-            "video/x-raw,width=160",
+            // pixel-aspect-ratio=1/1 forces videoscale to actually resize
+            // the height to match, rather than leaving it unchanged and
+            // just rewriting the PAR metadata to compensate - which made a
+            // real 4:3 4096x3072 source into a 160x3072 thumbnail.
+            "video/x-raw,width=160,pixel-aspect-ratio=1/1",
             "!",
             "jpegenc",
             "!",
