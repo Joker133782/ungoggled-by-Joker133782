@@ -7,10 +7,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/latest"><img src="https://img.shields.io/badge/release-v0.3.49-4fd1c5?style=flat-square&labelColor=11151d" alt="Release v0.3.49"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4fd1c5?style=flat-square&labelColor=11151d" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/Raspberry%20Pi%204-64--bit-4fd1c5?style=flat-square&labelColor=11151d" alt="Raspberry Pi 4, 64-bit">
-  <img src="https://img.shields.io/badge/Rust%20%2B%20React-4fd1c5?style=flat-square&labelColor=11151d" alt="Rust and React">
+  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/latest"><img src="docs/images/badges/release.svg" alt="Release v0.3.49"></a>
+  <a href="LICENSE"><img src="docs/images/badges/license.svg" alt="MIT license"></a>
+  <img src="docs/images/badges/platform.svg" alt="Raspberry Pi 4, 64-bit">
+  <img src="docs/images/badges/stack.svg" alt="Rust and React">
 </p>
 
 ## ⬇ Download
