@@ -27,7 +27,10 @@ pub trait Host {
     fn service(&self, verb: &str) -> Result<()>;
     fn migrate(&self, binary: &Path, data: &Path, output: &Path) -> Result<Vec<String>>;
     /// `build` is `None` for the factory release, which reports no build ID.
-    fn healthy(&self, version: &str, build: Option<&str>) -> bool;
+    /// `Err` carries a human-readable reason (unreachable, wrong
+    /// version/build, not up long enough, or timed out) so it can be
+    /// persisted into `state.message` for diagnosis.
+    fn healthy(&self, version: &str, build: Option<&str>) -> Result<(), String>;
     /// Offline-install any bundled `.deb` packages in `dir` (if it exists
     /// and the dependency is not already present). Returns human-readable
     /// notes for `state.warnings`; never returns an `Err`, because a failure
@@ -62,31 +65,68 @@ impl Host for System {
         );
         serde_json::from_slice(&out.stdout).context("Invalid migration report")
     }
-    fn healthy(&self, version: &str, build: Option<&str>) -> bool {
+    fn healthy(&self, version: &str, build: Option<&str>) -> Result<(), String> {
         let mut consecutive = 0;
+        let mut last_reason = "no attempts made".to_string();
         for _ in 0..40 {
-            let valid = Command::new("curl")
-                .args(["-fsS", "--max-time", "1", "http://127.0.0.1/api/status"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
-                .is_some_and(|s| {
-                    s["version"] == version
+            let outcome = (|| -> Result<serde_json::Value, String> {
+                // -L -k: plain HTTP redirects to HTTPS (with a self-signed
+                // cert) whenever TLS is enabled, which is the default; curl
+                // doesn't fail on a 3xx on its own, so without -L this was
+                // "succeeding" with an empty, unparsable body on every
+                // single attempt, failing the health check 100% of the time.
+                let out = Command::new("curl")
+                    .args([
+                        "-fsSL",
+                        "-k",
+                        "--max-time",
+                        "2",
+                        "http://127.0.0.1/api/status",
+                    ])
+                    .output()
+                    .map_err(|e| format!("curl failed to start: {e}"))?;
+                if !out.status.success() {
+                    return Err(format!(
+                        "curl exit {}: {}",
+                        out.status,
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ));
+                }
+                serde_json::from_slice(&out.stdout)
+                    .map_err(|e| format!("invalid JSON from /api/status: {e}"))
+            })();
+            let valid = match &outcome {
+                Ok(s) => {
+                    let uptime = s["uptime_seconds"].as_u64().unwrap_or(0);
+                    let ok = s["version"] == version
                         && s["build_id"] == serde_json::json!(build)
-                        && s["uptime_seconds"].as_u64().unwrap_or(0) >= 3
-                });
+                        && uptime >= 3;
+                    if !ok {
+                        last_reason = format!(
+                            "reachable but not matching yet (wanted version={version} \
+                             build_id={build:?}, got version={:?} build_id={:?} \
+                             uptime_seconds={uptime})",
+                            s["version"], s["build_id"]
+                        );
+                    }
+                    ok
+                }
+                Err(e) => {
+                    last_reason = e.clone();
+                    false
+                }
+            };
             if valid {
                 consecutive += 1;
                 if consecutive >= 3 {
-                    return true;
+                    return Ok(());
                 }
             } else {
                 consecutive = 0;
             }
             thread::sleep(Duration::from_millis(500));
         }
-        false
+        Err(format!("timed out after 20s; last attempt: {last_reason}"))
     }
     fn install_packages(&self, dir: &Path) -> Vec<String> {
         if !dir.is_dir() {
@@ -141,18 +181,30 @@ fn lock_wait(paths: &Paths) -> Result<Lock> {
     }
     Lock::acquire(paths)
 }
-pub fn install(id: &str) -> Result<()> {
+pub fn install(id: &str, skip_health_check: bool) -> Result<()> {
     let paths = Paths::default();
     let _lock = lock_wait(&paths)?;
-    transact(&paths, id, package::architecture(), &System)
+    transact(
+        &paths,
+        id,
+        package::architecture(),
+        &System,
+        skip_health_check,
+    )
 }
 /// Run one install or rollback job and record its outcome in the history.
-fn transact(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
+fn transact(
+    paths: &Paths,
+    id: &str,
+    arch: &str,
+    host: &impl Host,
+    skip_health_check: bool,
+) -> Result<()> {
     let from = releases::current_name(paths);
     let rollback = paths
         .job(id)
         .is_ok_and(|j| j.join("rollback.json").exists());
-    let result = apply(paths, id, arch, host);
+    let result = apply(paths, id, arch, host, skip_health_check);
     if let Err(e) = &result {
         let mut state = paths.state()?;
         if state.phase != Phase::RolledBack {
@@ -243,10 +295,25 @@ struct Candidate {
     prepare: Option<PathBuf>,
     done: String,
 }
-fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
+fn apply(
+    paths: &Paths,
+    id: &str,
+    arch: &str,
+    host: &impl Host,
+    skip_health_check: bool,
+) -> Result<()> {
     let mut state = paths.state()?;
     ensure!(
-        state.id.as_deref() == Some(id) && matches!(state.phase, Phase::Ready | Phase::Queued),
+        state.id.as_deref() == Some(id)
+            && matches!(
+                state.phase,
+                // RolledBack/Failed: this exact job's own files are still
+                // staged (never cleaned up except on success), so a retry
+                // — typically with `skip_health_check` after a false-
+                // positive health check — can run the same job again
+                // rather than needing a fresh upload.
+                Phase::Ready | Phase::Queued | Phase::RolledBack | Phase::Failed
+            ),
         "No matching prepared update"
     );
     let job = paths.job(id)?;
@@ -271,6 +338,7 @@ fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
             },
             previous,
             host,
+            skip_health_check,
         );
     }
     let source = job.join("package");
@@ -332,6 +400,7 @@ fn apply(paths: &Paths, id: &str, arch: &str, host: &impl Host) -> Result<()> {
         },
         previous,
         host,
+        skip_health_check,
     )?;
     let _ = fs::remove_dir_all(source);
     Ok(())
@@ -345,6 +414,7 @@ fn switch(
     next: Candidate,
     previous: Option<PathBuf>,
     host: &impl Host,
+    skip_health_check: bool,
 ) -> Result<()> {
     let target = next.dir.clone();
     setup_recovery(paths)?;
@@ -409,10 +479,22 @@ fn switch(
         host.service("daemon-reload")?;
         host.service("enable")?;
         host.service("start")?;
-        ensure!(
-            host.healthy(&next.version, next.build.as_deref()),
-            "New release did not pass its health check"
-        );
+        if skip_health_check {
+            // An explicit escape hatch for a health check that is itself
+            // broken (it has happened — see CHANGELOG 0.3.34/0.3.35) and
+            // would otherwise roll back a perfectly good release forever.
+            // Not run at all, so a release that is actually broken keeps
+            // running instead of being caught here — flagged clearly since
+            // this is the one case where "succeeded" doesn't mean verified.
+            state
+                .warnings
+                .push("Health check skipped at your request — this release was not automatically verified before being kept.".into());
+        } else {
+            host.healthy(&next.version, next.build.as_deref())
+                .map_err(|reason| {
+                    anyhow::anyhow!("New release did not pass its health check: {reason}")
+                })?;
+        }
         // Only a healthy application becomes the recovery helper for the next update.
         atomic_copy(
             &target.join("bin/ungoggled"),
@@ -552,11 +634,15 @@ mod tests {
         fn migrate(&self, _: &Path, data: &Path, output: &Path) -> Result<Vec<String>> {
             crate::settings::migrate(data, output)
         }
-        fn healthy(&self, version: &str, build: Option<&str>) -> bool {
+        fn healthy(&self, version: &str, build: Option<&str>) -> Result<(), String> {
             self.checked
                 .borrow_mut()
                 .push((version.into(), build.map(Into::into)));
-            self.healthy
+            if self.healthy {
+                Ok(())
+            } else {
+                Err("fake host reported unhealthy".into())
+            }
         }
         fn install_packages(&self, dir: &Path) -> Vec<String> {
             self.packages_checked.borrow_mut().push(dir.to_path_buf());
@@ -606,7 +692,7 @@ mod tests {
     fn commits_healthy_release_and_preserves_configuration() {
         let (_f, paths, old) = setup();
         let host = FakeHost::new(true);
-        apply(&paths, "123", "aarch64", &host).unwrap();
+        apply(&paths, "123", "aarch64", &host, false).unwrap();
         assert_eq!(
             *host.packages_checked.borrow(),
             vec![paths.job("123").unwrap().join("package/packages")]
@@ -638,7 +724,7 @@ mod tests {
         let (_f, paths, old) = setup();
         let before = fs::read(paths.at(FILES[2])).unwrap();
         let host = FakeHost::new(false);
-        assert!(apply(&paths, "123", "aarch64", &host).is_err());
+        assert!(apply(&paths, "123", "aarch64", &host, false).is_err());
         assert_eq!(paths.state().unwrap().phase, Phase::RolledBack);
         assert_eq!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
         assert_eq!(fs::read(paths.at(FILES[2])).unwrap(), before);
@@ -647,11 +733,34 @@ mod tests {
         assert_eq!(host.calls.borrow().last().unwrap(), "start");
     }
     #[test]
+    fn skip_health_check_keeps_a_release_the_fake_host_reports_unhealthy_and_retries_a_rolled_back_job()
+     {
+        let (_f, paths, old) = setup();
+        let host = FakeHost::new(false);
+        assert!(apply(&paths, "123", "aarch64", &host, false).is_err());
+        assert_eq!(paths.state().unwrap().phase, Phase::RolledBack);
+        assert_eq!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
+        // Retrying the exact same job, now skipping the check, does not need
+        // a fresh upload (apply's phase guard accepts RolledBack for this).
+        apply(&paths, "123", "aarch64", &host, true).unwrap();
+        let state = paths.state().unwrap();
+        assert_eq!(state.phase, Phase::Succeeded);
+        assert_ne!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
+        assert!(
+            state
+                .warnings
+                .iter()
+                .any(|w| w.contains("Health check skipped")),
+            "{:?}",
+            state.warnings
+        );
+    }
+    #[test]
     fn corrupt_settings_abort_and_restore() {
         let (_f, paths, old) = setup();
         fs::write(paths.at(FILES[2]), "invalid JSON").unwrap();
         let host = FakeHost::new(true);
-        assert!(apply(&paths, "123", "aarch64", &host).is_err());
+        assert!(apply(&paths, "123", "aarch64", &host, false).is_err());
         assert_eq!(paths.state().unwrap().phase, Phase::RolledBack);
         assert_eq!(fs::read_link(paths.at(CURRENT)).unwrap(), old);
         assert_eq!(
@@ -747,7 +856,7 @@ mod tests {
     fn switch_back_and_forth_between_releases_with_history() {
         let (_f, paths, factory) = with_factory_release();
         let host = FakeHost::new(true);
-        transact(&paths, "123", "aarch64", &host).unwrap();
+        transact(&paths, "123", "aarch64", &host, false).unwrap();
         let updated = current(&paths);
         assert_ne!(updated, FACTORY);
         let release = paths.at(releases::DIRECTORY).join(&updated);
@@ -768,7 +877,7 @@ mod tests {
         // Back to the factory release: its binary migrates the settings and the
         // health check expects no build ID.
         queue_rollback(&paths, "124", FACTORY);
-        transact(&paths, "124", "aarch64", &host).unwrap();
+        transact(&paths, "124", "aarch64", &host, false).unwrap();
         assert_eq!(current(&paths), FACTORY);
         assert_eq!(
             fs::canonicalize(paths.at(CURRENT)).unwrap(),
@@ -785,7 +894,7 @@ mod tests {
         // Forward again to the newer release, restoring its service files.
         fs::write(paths.at(FILES[0]), "changed meanwhile").unwrap();
         queue_rollback(&paths, "125", &updated);
-        transact(&paths, "125", "aarch64", &host).unwrap();
+        transact(&paths, "125", "aarch64", &host, false).unwrap();
         assert_eq!(current(&paths), updated);
         assert_eq!(
             fs::read_to_string(paths.at(FILES[0])).unwrap(),
@@ -815,11 +924,11 @@ mod tests {
     #[test]
     fn failed_switch_back_keeps_current_release_and_settings() {
         let (_f, paths, _) = with_factory_release();
-        transact(&paths, "123", "aarch64", &FakeHost::new(true)).unwrap();
+        transact(&paths, "123", "aarch64", &FakeHost::new(true), false).unwrap();
         let updated = current(&paths);
         let settings = fs::read(paths.at(FILES[2])).unwrap();
         queue_rollback(&paths, "124", FACTORY);
-        assert!(transact(&paths, "124", "aarch64", &FakeHost::new(false)).is_err());
+        assert!(transact(&paths, "124", "aarch64", &FakeHost::new(false), false).is_err());
         assert_eq!(current(&paths), updated);
         assert_eq!(fs::read(paths.at(FILES[2])).unwrap(), settings);
         assert_eq!(paths.state().unwrap().phase, Phase::RolledBack);
@@ -835,7 +944,7 @@ mod tests {
         for name in [FACTORY, "0.3.0-ffffffffffff", "../etc", "old"] {
             assert!(releases::rollback_target(&paths, name).is_err(), "{name}");
             queue_rollback(&paths, "124", name);
-            assert!(transact(&paths, "124", "aarch64", &FakeHost::new(true)).is_err());
+            assert!(transact(&paths, "124", "aarch64", &FakeHost::new(true), false).is_err());
             assert_eq!(current(&paths), FACTORY);
         }
         assert!(

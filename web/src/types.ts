@@ -11,6 +11,12 @@ export type Status = {
   input_fps?: number;
   input_nominal_fps?: number;
   output_fps?: number;
+  /** While a USB video plays (else null): clip seconds per second of real
+   * time (1 = real time), new pictures per second on the screen, and the
+   * clip's own frame rate. */
+  usb_speed?: number | null;
+  usb_fps?: number | null;
+  usb_clip_fps?: number | null;
   hdmi_width?: number;
   hdmi_height?: number;
   hdmi_hz?: number;
@@ -36,9 +42,17 @@ export type Status = {
   goggles_protocol?: "goggles3" | "goggles2";
   goggles_protocol_state?: "probing" | "video" | "forced";
   disk_warning?: boolean;
+  /** An update changed boot settings that only take effect after a reboot. */
+  reboot_required?: boolean;
+};
+export type HdmiConnector = {
+  id: number;
+  name: string;
+  connected: boolean;
 };
 export type Settings = {
   hdmi_mode: string;
+  hdmi_connector: number | null;
   fallback_image: string | null;
   preview_enabled: boolean;
   beeper_pin: number | null;
@@ -50,12 +64,34 @@ export type Settings = {
   stream_enabled: boolean;
   stream_quality: string;
   auto_record: boolean;
+  crash_buffer: boolean;
+  record_to_usb: boolean;
+  wifi_always_ap: boolean;
+  terminal_enabled: boolean;
+  stretch_live: boolean;
+  stretch_usb: boolean;
 };
+/** One entry of the idle-screen library (`GET /api/images`). */
 export type ImageEntry = {
   id: string;
   url: string;
-  kind?: "image" | "video";
+  /** A small JPEG: a scaled-down image, or a video's poster frame. */
+  thumbnail: string;
+  kind: "image" | "video";
+  name: string;
+  /** Shipped with ungoggled: always there, can't be deleted. */
+  builtin: boolean;
+  size: number;
+  modified: number;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
 };
+export type ImageLimits = {
+  videos: { used: number; max: number };
+  images: { used: number; max: number };
+};
+export type ImageLibrary = { images: ImageEntry[]; limits: ImageLimits };
 export type Sample = {
   t: number;
   bitrate_mbps: number | null;
@@ -64,8 +100,22 @@ export type Sample = {
   temperature_c: number | null;
   phase: string;
   hdmi: string;
+  cpu_percent: number;
+  ram_used_mib: number;
+  ram_total_mib: number;
+  disk_read_kib_s: number;
+  disk_write_kib_s: number;
+  wifi_rx_mbps: number;
+  wifi_tx_mbps: number;
+  lan_rx_mbps: number;
+  lan_tx_mbps: number;
 };
-export type History = { now: number; samples: Sample[] };
+export type History = {
+  /** Identifies one run of the service; `t` restarts with every run. */
+  instance: number;
+  now: number;
+  samples: Sample[];
+};
 export type RecordingStatus = {
   recording: boolean;
   name?: string;
@@ -83,6 +133,8 @@ export type UsbVideo = {
   name: string;
   device: string;
   size: number;
+  /** Unix seconds; absent if the file's modification time couldn't be read. */
+  mtime?: number;
   thumbnail: boolean;
 };
 export type UsbVideoStatus = {
@@ -91,10 +143,38 @@ export type UsbVideoStatus = {
   paused?: boolean | null;
   position?: number | null;
   duration?: number | null;
+  drives: string[];
+  scan: { done: number; total: number } | null;
 };
 export type Wifi = {
   available: boolean;
   ssid?: string;
   applying?: boolean;
   error?: string;
+};
+export type WifiNetwork = { ssid: string; signal: number; secured: boolean };
+/** `GET /api/wifi/share`: what a spectator's phone needs to join. */
+export type WifiShare =
+  | {
+      mode: "ap";
+      ssid: string | null;
+      security: "WPA" | "nopass";
+      password: string | null;
+    }
+  /** Joined another network; the Pi's own access point is down. */
+  | { mode: "client"; ssid: string | null }
+  | { mode: "none" };
+export type TerminalStatus = {
+  enabled: boolean;
+  /** Someone (maybe this browser) has a terminal open right now. */
+  active: boolean;
+  idle_seconds: number;
+  max_seconds: number;
+};
+export type WifiClient = {
+  active: boolean;
+  ssid?: string | null;
+  ip?: string | null;
+  applying?: boolean;
+  error?: string | null;
 };

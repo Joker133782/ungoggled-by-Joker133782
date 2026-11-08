@@ -18,7 +18,7 @@
   <p>Connecting…</p>
   <p><button id="retry">Tap to play</button></p>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.2/dist/mpegts.js"></script>
 <script>
 const video = document.getElementById('video');
 const message = document.getElementById('message');
@@ -43,7 +43,7 @@ function start() {
     player = null;
   }
   player = mpegts.createPlayer(
-    { type: 'mpegts', isLive: true, url: '/api/stream.ts' },
+    { type: 'mpegts', isLive: true, url: new URL('/api/stream.ts', location.href).href },
     { liveBufferLatencyChasing: true, enableWorker: true },
   );
   player.on(mpegts.Events.ERROR, () => {

@@ -1,0 +1,8 @@
+kernel_release=6.18.50+rpt-rpi-v8
+kernel_package=1:6.18.50-1+rpt1
+driver_commit=f2bc178ed43d8f737c10e2ca80598e2a812eab7b
+patch_sha256=582b21f359f66a700b3561733013c13c7d4a8f6885fe9d2d82d6276442275c33
+vermagic=6.18.50+rpt-rpi-v8 SMP preempt mod_unload modversions aarch64
+srcversion=248BA44E93962CBDB77A832
+module_sha256=0f1b0f50c59fab2c8ec69ba1fa84fbf30162cf1ae802b5132c1782d950966340
+overlay_sha256=0b9cd5092f12521ca439f71a717e0b5486786eaf3c83a755e028d5108356a7e1

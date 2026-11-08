@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: GPL-2.0
+// ungoggled: a 128 MiB reserved pool for the HEVC decoder's own working
+// buffers (PU/coeff/command FIFOs/colmv), attached to the decoder node through
+// "memory-region". Only the patched rpi-hevc-dec module in this directory uses
+// it (the stock module ignores the property); src/system_fixes.rs adds the
+// dtoverlay line only together with that module. Reusable: the kernel can
+// still use the pages for movable allocations while the decoder does not.
+// Build: scripts/build-hevc-module.sh build (dtc -@ -I dts -O dtb).
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2711";
+
+	fragment@0 {
+		target-path = "/reserved-memory";
+		__overlay__ {
+			hevc_cma: hevc_cma@0 {
+				compatible = "shared-dma-pool";
+				reusable;
+				size = <0x8000000>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/scb/codec@7eb10000";
+		__overlay__ {
+			memory-region = <&hevc_cma>;
+		};
+	};
+};

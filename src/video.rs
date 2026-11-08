@@ -1,6 +1,6 @@
 //! One display owner for the lifetime of the service. USB workers only deliver
 //! compressed bytes; reconnecting them never removes the fallback framebuffer.
-use crate::{WorkerArgs, settings::Store};
+use crate::{WorkerArgs, playspeed::PlaySpeed, settings::Store};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -76,17 +76,29 @@ impl UsbPlayer {
     fn finished(&mut self) -> bool {
         self.child.try_wait().ok().flatten().is_some()
     }
+    /// True once mpv has played past the last frame. `--idle=yes` keeps it
+    /// running at that point rather than exiting (so `finished` alone never
+    /// catches this) — without this check, a clip left to play to the end
+    /// rather than being stopped from the web UI left the render loop
+    /// standing aside for USB playback forever, never falling through to
+    /// the idle screen again until the Pi was restarted (confirmed in the
+    /// field, 2026-11-01).
+    fn eof(&self, socket: &Path) -> bool {
+        mpv_command(socket, json!(["get_property", "eof-reached"]))
+            .ok()
+            .and_then(|r| r.get("data").and_then(Value::as_bool))
+            .unwrap_or(false)
+    }
 }
 impl Drop for UsbPlayer {
     fn drop(&mut self) {
+        // A plain kill: the kernel frees mpv's DRM framebuffers and its
+        // V4L2/CMA buffers when the process dies. (A graceful IPC `quit` was
+        // tried on 2026-11-02 against a "CMA leak" that turned out to be page
+        // cache; see FINDINGS.MD.)
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-/// Quote a value for GStreamer's `gst_parse_launch` pipeline syntax, so a
-/// path containing spaces or syntax characters (`!`, `,`) is not misread.
-pub(crate) fn quote_gst(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 /// Fixed path for mpv's control socket while a USB video plays. Fixed rather
 /// than per-session because only one USB video ever plays at a time.
@@ -126,26 +138,137 @@ fn drm_connector_name(id: u32) -> Option<String> {
             })
         })
 }
-fn spawn_usb_player(args: &WorkerArgs, path: &Path) -> anyhow::Result<UsbPlayer> {
+/// One poll of mpv's clock for the speed readout of a USB video (see
+/// `playspeed`): the status fields to publish, or `None` while there is no
+/// reading yet (just started, just seeked, mpv not answering). `output_fps` is
+/// filled too, so the history graph and the HDMI card show what reaches the
+/// screen.
+fn usb_speed_status(speed: &mut PlaySpeed, socket: &Path) -> Option<Value> {
+    let get = |prop: &str| {
+        mpv_command(socket, json!(["get_property", prop]))
+            .ok()
+            .and_then(|r| r.get("data").cloned())
+    };
+    let position = get("time-pos").and_then(|v| v.as_f64());
+    let paused = get("pause").and_then(|v| v.as_bool()).unwrap_or(false);
+    let clip_fps = get("container-fps").and_then(|v| v.as_f64());
+    let reading = speed.update(Instant::now(), position, paused, clip_fps)?;
+    Some(json!({
+        "usb_speed": reading.speed,
+        "usb_fps": reading.fps,
+        "usb_clip_fps": clip_fps,
+        "output_fps": reading.fps.unwrap_or(0.0),
+    }))
+}
+/// The same fields emptied: no USB video is playing (any more).
+fn usb_speed_cleared() -> Value {
+    json!({"usb_speed":null,"usb_fps":null,"usb_clip_fps":null})
+}
+/// `drm_mode`: the HDMI mode already on screen (`Display::mpv_mode`), kept
+/// for playback; `None` lets mpv pick the monitor's preferred mode.
+fn spawn_usb_player(
+    args: &WorkerArgs,
+    path: &Path,
+    drm_mode: Option<&str>,
+    stretch: bool,
+) -> anyhow::Result<UsbPlayer> {
     let socket = usb_mpv_socket(&args.video_socket);
     let _ = std::fs::remove_file(&socket);
     let mut cmd = Command::new("mpv");
-    cmd.args(["--no-terminal", "--idle=yes", "--hwdec=auto"]);
+    // Not --no-terminal: that silences every message, which is how a video
+    // output that failed to start went unnoticed (mpv then just plays the
+    // audio track). mpv writes its messages to stdout, inherited into the
+    // journal below; --quiet drops the \r-redrawn status line.
+    cmd.args([
+        "--no-input-terminal",
+        "--quiet",
+        "--no-msg-color",
+        "--idle=yes",
+        // Action-cam footage beyond the Pi 4's decode throughput (a DJI
+        // Action 2's 4096x3072 60 fps mode decodes at ~34 frames/s while it
+        // is also being scanned out, ~37 with the small draw plane below,
+        // ~53 at most with nothing on screen at the stock
+        // 500 MHz HEVC clock) cannot play in real time: every frame
+        // is a reference frame, so nothing can be skipped before decoding.
+        // With audio as the master clock the video falls further behind
+        // every second (A/V desync, then a full demuxer queue), and dropping
+        // frames at the video output only makes it choppier without
+        // speeding up decoding (measured 2026-11-06, FINDINGS.MD). Without
+        // audio mpv shows every frame, slower but smooth. This is HDMI
+        // review playback (the audio would only reach the 3.5 mm jack), so
+        // that is the right trade.
+        "--audio=no",
+    ]);
+    // "vd" logs which decoder/hwdec mpv actually opened, "vo" the DRM
+    // output's mode, plane and hardware-frame-import choices.
+    cmd.args(["--msg-level=vd=v,vo=v"]);
     cmd.arg(format!("--input-ipc-server={}", socket.display()));
     if args.output == "hdmi" {
-        cmd.arg("--vo=drm");
+        // Zero-copy: decoded frames go straight to a display (HVS) plane,
+        // which also scales them. `--vo=drm` can only scale in software
+        // after copying every frame back into RAM: measured on a Pi 4 with a
+        // DJI Osmo Nano 3840x2880 50 fps 10-bit HEVC clip, that played at
+        // 0.14x speed (~6 frames/s on screen, very choppy, yet mpv reported
+        // no dropped frames), vs. 0.86x with every frame shown here. 30 fps
+        // 4K HEVC and 1080p60 H.264 play in real time. See FINDINGS.MD.
+        cmd.args([
+            "--vo=gpu",
+            "--gpu-context=drm",
+            "--gpu-hwdec-interop=drmprime-overlay",
+            // By default the video goes on an overlay plane at zpos 0,
+            // below the primary plane, which vc4 rejects: every atomic
+            // commit failed with EINVAL. Swap the planes' roles instead.
+            "--drm-drmprime-video-plane=primary",
+            "--drm-draw-plane=overlay",
+            // The draw plane only carries mpv's OSD here (unused), yet at the
+            // output size it is a full-screen ARGB buffer that the GPU redraws
+            // and the display reads every refresh. That memory traffic slows
+            // the HEVC decoder: a quarter-size surface (scaled up by the
+            // display) gave 0.59x -> 0.62x for a DJI Action 2 4096x3072 clip,
+            // 0.79x -> 0.82x for an O4 3840x2880 clip (2026-11-07,
+            // FINDINGS.MD). Not smaller: a clip mpv has to decode in software
+            // is rendered into this plane at this size. (A line-skip zoom that
+            // went with it was dropped: it falsifies the colours, FINDINGS.MD.)
+            "--drm-draw-surface-size=960x540",
+            // HEVC on the stateless rpi-hevc-dec, H.264 on the stateful
+            // bcm2835-codec, both as zero-copy DRM PRIME frames; anything
+            // else falls back to software decoding.
+            "--hwdec=drm,v4l2m2m",
+            // Frame threading keeps several frames in flight in the HEVC
+            // decoder: ~2x the throughput of the default single thread,
+            // bit-exact with software decoding.
+            "--vd-lavc-o=threads=4",
+            // A clip the decoder can't quite sustain (4K at 50 fps) plays a
+            // little slower but smoothly, instead of mpv dropping most
+            // frames to keep up with the audio clock.
+            "--framedrop=no",
+            // Cheap GPU rendering for anything decoded in software.
+            "--profile=fast",
+            // The display plane can't rotate by 90/270 degrees, so mpv
+            // honouring a clip's rotation flag (an action cam mounted
+            // sideways) squeezed the unrotated picture into a portrait
+            // rectangle. Show such clips as recorded, undistorted.
+            "--video-rotate=no",
+        ]);
+        if stretch {
+            // Fill the whole screen instead of keeping the clip's shape.
+            cmd.arg("--keepaspect=no");
+        }
+        if let Some(mode) = drm_mode {
+            cmd.arg(format!("--drm-mode={mode}"));
+        }
         if let Some(id) = args.connector
             && let Some(name) = drm_connector_name(id)
         {
             cmd.arg(format!("--drm-connector={name}"));
         }
     } else {
-        cmd.arg("--vo=null");
+        cmd.args(["--hwdec=auto", "--vo=null"]);
     }
     cmd.arg(path);
     let child = cmd
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|e| {
@@ -235,7 +358,7 @@ fn starts_frame(nal: &[u8]) -> bool {
 fn spawn_loop(args: &WorkerArgs, video: &Path, report: Report) -> anyhow::Result<Loop> {
     let info = crate::assets::video_info(video);
     let units = nal_units(&std::fs::read(video)?)?;
-    let mut player = spawn_player(args, false, report, Arc::default(), Role::Fallback)?;
+    let mut player = spawn_player(args, false, report, Arc::default(), Role::Fallback, None)?;
     let mut stdin = player
         .child
         .stdin
@@ -280,19 +403,82 @@ fn spawn_loop(args: &WorkerArgs, video: &Path, report: Report) -> anyhow::Result
     })
 }
 
+fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+/// The pixel aspect ratio that makes a `w`x`h` picture fill a screen of
+/// `out_w`x`out_h` pixels when the display sink keeps the picture's own shape
+/// (kmssink has no "stretch" switch, but it honours this ratio). `None` when
+/// the picture already has the screen's shape (within 1 %) or the numbers are
+/// implausible (a stretch of more than 4x in either direction).
+fn fill_par(w: u32, h: u32, out_w: u32, out_h: u32) -> Option<(u32, u32)> {
+    if w == 0 || h == 0 || out_w == 0 || out_h == 0 {
+        return None;
+    }
+    let (n, d) = (
+        u64::from(out_w) * u64::from(h),
+        u64::from(out_h) * u64::from(w),
+    );
+    let g = gcd(n, d);
+    let (n, d) = (n / g, d / g);
+    if n.abs_diff(d) * 100 <= d || n > d * 4 || d > n * 4 {
+        return None;
+    }
+    Some((u32::try_from(n).ok()?, u32::try_from(d).ok()?))
+}
+/// Whether a change from `current` to `next` settings has to rebuild the
+/// output right now (stopping the live decoder, the idle loop and the display
+/// with it). Settings this loop never reads (`terminal_enabled`) or applies
+/// another way (`stretch_usb`) don't count.
+/// A different idle screen alone waits while there is a `live` picture:
+/// rebuilding the display under live video would interrupt it just to change
+/// what is shown once there is none (the same reasoning as the disk-full
+/// notice in `start`); it is applied as soon as the live picture ends.
+fn must_rebuild(
+    current: &crate::settings::Settings,
+    next: &crate::settings::Settings,
+    live: bool,
+) -> bool {
+    let video = |s: &crate::settings::Settings| crate::settings::Settings {
+        terminal_enabled: false,
+        // Applied to a running USB player over its IPC socket, or when the
+        // next clip starts; no reason to tear down the live decoder.
+        stretch_usb: false,
+        fallback_image: None,
+        ..s.clone()
+    };
+    video(current) != video(next) || (current.fallback_image != next.fallback_image && !live)
+}
 // Each parameter is independent shared state the render thread owns for its
 // whole lifetime; grouping them into a struct wouldn't make any of them less
 // of a parameter, just hide the same count behind one more layer.
+/// The USB drive mounted for `record_to_usb`, if the setting is on and one
+/// is currently plugged in, else the SD card's `recordings/` directory.
+fn recordings_dir(
+    store: &Store,
+    storage: &crate::storage::Store,
+    current: &crate::settings::Settings,
+) -> std::path::PathBuf {
+    if current.record_to_usb
+        && let Some(mountpoint) = storage.recording_mountpoint()
+    {
+        mountpoint.join("ungoggled-recordings")
+    } else {
+        store.dir.join("recordings")
+    }
+}
 #[allow(clippy::too_many_arguments)]
 pub fn start(
     args: WorkerArgs,
     store: Store,
+    storage: crate::storage::Store,
     report: Report,
     preview: Preview,
     shutdown: Arc<AtomicBool>,
     usb_playback: Arc<Mutex<Option<std::path::PathBuf>>>,
     recording: crate::recording::Controller,
     disk_warning: Arc<Mutex<Option<std::path::PathBuf>>>,
+    network_notice: Arc<Mutex<Option<std::path::PathBuf>>>,
     stream: crate::stream::Controller,
 ) -> anyhow::Result<thread::JoinHandle<()>> {
     if args.video_socket.exists() {
@@ -300,7 +486,6 @@ pub fn start(
     }
     let warning_image = args.video_socket.with_file_name("sd-card-full.png");
     let _ = std::fs::write(&warning_image, include_bytes!("../assets/sd-card-full.png"));
-    let recordings_dir = store.dir.join("recordings");
     // tmpfs: a flight in progress lives in RAM, not on the SD card, until it
     // is finalized there once the feed drops.
     let auto_record_dir = args.video_socket.with_file_name("auto-recording");
@@ -314,13 +499,29 @@ pub fn start(
     let loss = lost.clone();
     thread::spawn(move || receive(socket, tx, q, loss, receive_stop));
     Ok(thread::spawn(move || {
+        // The CLI --connector is the ultimate fallback (mostly for testing);
+        // the setting, when present, wins. Overwriting args.connector keeps
+        // every existing use of it (Display::prepare, spawn_player,
+        // spawn_loop, spawn_usb_player) in sync for free.
+        let cli_connector = args.connector;
+        let mut args = args;
         let mut child: Option<Player> = None;
         let mut fallback: Option<Loop> = None;
         let mut usb_player: Option<UsbPlayer> = None;
         let mut current_usb: Option<std::path::PathBuf> = None;
+        let mut usb_speed = PlaySpeed::default();
+        let mut usb_speed_at = Instant::now() - Duration::from_secs(1);
+        let mut usb_speed_shown = false;
+        // Whether the running USB player was started (or switched) to fill
+        // the screen; follows the `stretch_usb` setting.
+        let mut usb_stretched = false;
         let mut fallback_retry = Instant::now() - Duration::from_secs(5);
         let mut display: Option<crate::display::Display> = None;
+        // The mode of the last display prepared for the current settings,
+        // which USB playback keeps (the display itself is dropped for it).
+        let mut display_mode: Option<String> = None;
         let mut current = store.get();
+        args.connector = current.hdmi_connector.or(cli_connector);
         let mut annex = crate::h264::AnnexB::default();
         let mut parameters = crate::h264::Parameters::default();
         let mut last_input: Option<Instant> = None;
@@ -329,14 +530,29 @@ pub fn start(
         let mut stats_at = Instant::now();
         let mut frames = 0_u64;
         let mut starts = 0_u64;
+        // The live decoder was started stretched, for a picture of this size,
+        // and whether it has shown a frame since. The display chip refuses some
+        // stretches (the HVS runs out of scaling memory: drmModeSetPlane fails
+        // with ENOSPC, so the decoder never shows a picture); a picture size
+        // that failed this way is shown unstretched from then on.
+        let mut child_stretch: Option<(u32, u32)> = None;
+        let mut child_showed = false;
+        let mut stretch_rejected: Option<(u32, u32)> = None;
         let mut shown_warning: Option<std::path::PathBuf> = None;
         while !shutdown.load(Ordering::Relaxed) {
             let settings = store.get();
-            if settings != current {
+            let live = last_input.is_some_and(|t| t.elapsed() <= Duration::from_millis(1500));
+            // `current` keeps the old settings until a rebuild is due, so a
+            // deferred idle-screen change is picked up again on a later tick.
+            if must_rebuild(&current, &settings, live) {
                 child = None;
                 fallback = None;
                 display = None;
-                current = settings;
+                display_mode = None;
+                current = settings.clone();
+                args.connector = current.hdmi_connector.or(cli_connector);
+                child_stretch = None;
+                stretch_rejected = None;
                 annex = Default::default();
                 *preview.lock().unwrap() = None;
                 prepare_at = Instant::now() - Duration::from_secs(5);
@@ -346,25 +562,39 @@ pub fn start(
             } else if stream.running() {
                 stream.stop();
             }
+            // Re-read every tick, not just on settings change: the USB drive
+            // itself can appear or disappear independently of the setting.
+            let recordings_dir = recordings_dir(&store, &storage, &current);
             if display.as_ref().is_some_and(|d| d.needs_upgrade()) {
                 child = None;
                 fallback = None;
                 display = None;
+                display_mode = None;
             }
             // Swap in the "SD card full" notice (or swap it back out) only
             // once there is no live input to glitch; rebuilding the display
             // while the goggles are still streaming would briefly interrupt
             // the live picture just to change what's underneath it.
-            let warning = disk_warning.lock().unwrap().clone();
+            let warning = disk_warning
+                .lock()
+                .unwrap()
+                .clone()
+                .or_else(|| network_notice.lock().unwrap().clone());
             let input_gone_now =
                 last_input.is_none_or(|t| t.elapsed() > Duration::from_millis(1500));
             if input_gone_now && warning != shown_warning {
                 display = None;
+                // Otherwise a fallback-video loop already running on its own
+                // overlay plane would just keep covering the image this
+                // warning/notice is about to show on the primary plane.
+                fallback = None;
+                fallback_retry = Instant::now();
                 prepare_at = Instant::now() - Duration::from_secs(5);
                 shown_warning = warning;
             }
             if args.output == "hdmi"
                 && display.is_none()
+                && current_usb.is_none()
                 && prepare_at.elapsed() > Duration::from_secs(3)
             {
                 prepare_at = Instant::now();
@@ -383,10 +613,12 @@ pub fn start(
                 ) {
                     Ok(d) => {
                         report(d.info.clone());
+                        display_mode = Some(d.mpv_mode.clone());
                         child = None;
                         display = Some(d);
                     }
                     Err(e) => {
+                        display_mode = None;
                         report(json!({"hdmi":"unavailable","display_error":format!("{e:#}")}))
                     }
                 }
@@ -399,9 +631,30 @@ pub fn start(
                 child = None;
                 fallback = None;
                 usb_player = None;
+                // The previous clip's numbers must not linger while the next
+                // one is still being measured.
+                usb_speed.reset();
+                if usb_speed_shown {
+                    usb_speed_shown = false;
+                    report(usb_speed_cleared());
+                }
+                if requested_usb.is_some() {
+                    // mpv sets the mode and owns the screen while it plays:
+                    // release our fallback/notice framebuffer (and its CMA
+                    // memory), and don't re-prepare the display meanwhile
+                    // (see the current_usb check above), so the two never
+                    // fight over the CRTC. Not a DRM-master problem: Display
+                    // drops master right after its modeset.
+                    display = None;
+                    prepare_at = Instant::now();
+                }
                 current_usb = requested_usb;
             }
-            if usb_player.as_mut().is_some_and(UsbPlayer::finished) {
+            if usb_player.as_mut().is_some_and(UsbPlayer::finished)
+                || usb_player
+                    .as_ref()
+                    .is_some_and(|p| p.eof(&usb_mpv_socket(&args.video_socket)))
+            {
                 usb_player = None;
                 current_usb = None;
                 *usb_playback.lock().unwrap() = None;
@@ -409,10 +662,14 @@ pub fn start(
             if let Some(path) = current_usb.clone()
                 && usb_player.is_none()
                 && args.output == "hdmi"
-                && display.is_some()
+                && display.is_none()
             {
-                match spawn_usb_player(&args, &path) {
-                    Ok(p) => usb_player = Some(p),
+                match spawn_usb_player(&args, &path, display_mode.as_deref(), settings.stretch_usb)
+                {
+                    Ok(p) => {
+                        usb_stretched = settings.stretch_usb;
+                        usb_player = Some(p);
+                    }
                     Err(e) => {
                         report(json!({"message":format!("USB video playback: {e:#}")}));
                         current_usb = None;
@@ -426,8 +683,31 @@ pub fn start(
                 while let Ok(c) = rx.try_recv() {
                     queued.fetch_sub(c.data.len(), Ordering::Relaxed);
                 }
+                // What reaches the screen: mpv's own counters stay at 0 even
+                // when it crawls, so derive it from how fast its clock runs.
+                if usb_player.is_some() && usb_speed_at.elapsed() >= Duration::from_secs(1) {
+                    usb_speed_at = Instant::now();
+                    if settings.stretch_usb != usb_stretched {
+                        let socket = usb_mpv_socket(&args.video_socket);
+                        let keep = json!(["set_property", "keepaspect", !settings.stretch_usb]);
+                        if mpv_command(&socket, keep).is_ok() {
+                            usb_stretched = settings.stretch_usb;
+                        }
+                    }
+                    if let Some(status) =
+                        usb_speed_status(&mut usb_speed, &usb_mpv_socket(&args.video_socket))
+                    {
+                        usb_speed_shown = true;
+                        report(status);
+                    }
+                }
                 thread::sleep(Duration::from_millis(100));
                 continue;
+            }
+            if usb_speed_shown {
+                usb_speed_shown = false;
+                usb_speed.reset();
+                report(usb_speed_cleared());
             }
             if child
                 .as_mut()
@@ -438,12 +718,20 @@ pub fn start(
             let heartbeat = child.as_ref().and_then(|p| *p.heartbeat.lock().unwrap());
             if let Some(t) = heartbeat {
                 last_frame = Some(t);
+                child_showed = true;
             }
             let input_gone = last_input.is_none_or(|t| t.elapsed() > Duration::from_millis(1500));
             let decoder_stalled =
                 child.is_some() && last_frame.is_some_and(|t| t.elapsed() > Duration::from_secs(3));
             if input_gone || decoder_stalled {
                 child = None;
+            }
+            if input_gone {
+                // A decoder that never got going because the goggles went away
+                // says nothing about the display; every new connection tries
+                // the stretch again.
+                child_stretch = None;
+                stretch_rejected = None;
             }
             if fallback.as_mut().is_some_and(|l| !l.healthy()) {
                 fallback = None;
@@ -462,6 +750,7 @@ pub fn start(
                 && input_gone
                 && args.output == "hdmi"
                 && display.is_some()
+                && shown_warning.is_none()
                 && fallback_retry.elapsed() > Duration::from_secs(3)
             {
                 fallback_retry = Instant::now();
@@ -490,6 +779,7 @@ pub fn start(
                     current.auto_record,
                     !input_gone,
                 );
+                recording.crash_tick(&recordings_dir, current.crash_buffer, !input_gone);
             }
             let chunk = match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(c) => c,
@@ -547,15 +837,42 @@ pub fn start(
                     if args.output == "hdmi" && display.is_none() {
                         playback_args.output = "test".into();
                     }
+                    // The previous decoder was stretched and never showed a
+                    // frame: the display chip refused this stretch.
+                    if let Some(size) = child_stretch.take()
+                        && !child_showed
+                    {
+                        stretch_rejected = Some(size);
+                        report(json!({"message":format!(
+                            "The display cannot stretch a {}x{} picture; showing it unstretched",
+                            size.0, size.1
+                        )}));
+                    }
+                    // Stretch to the screen: the picture's size comes from the
+                    // SPS that starts this decoder, the screen's from the mode.
+                    let size = crate::h264::sps_size(&nal);
+                    let pixel_aspect = current
+                        .stretch_live
+                        .then(|| {
+                            let info = &display.as_ref()?.info;
+                            let out = |key: &str| u32::try_from(info[key].as_u64()?).ok();
+                            let (w, h) = size?;
+                            fill_par(w, h, out("hdmi_width")?, out("hdmi_height")?)
+                        })
+                        .flatten()
+                        .filter(|_| size != stretch_rejected);
                     match spawn_player(
                         &playback_args,
                         current.preview_enabled,
                         report.clone(),
                         preview.clone(),
                         Role::Live,
+                        pixel_aspect,
                     ) {
                         Ok(p) => {
                             child = Some(p);
+                            child_stretch = pixel_aspect.and(size);
+                            child_showed = false;
                             starts += 1;
                             last_frame = Some(Instant::now());
                             report(json!({"decoder_starts":starts,"hdmi":"starting"}));
@@ -579,6 +896,7 @@ pub fn start(
         drop(display);
         stream.stop();
         // Save a flight in progress rather than discard it on shutdown.
+        let recordings_dir = recordings_dir(&store, &storage, &current);
         recording.auto_tick(&auto_record_dir, &recordings_dir, false, false);
         let _ = std::fs::remove_file(&args.video_socket);
     }))
@@ -637,6 +955,8 @@ fn spawn_player(
     report: Report,
     preview: Preview,
     role: Role,
+    // Stretches the picture over the screen, see `fill_par`.
+    pixel_aspect: Option<(u32, u32)>,
 ) -> anyhow::Result<Player> {
     let mut cmd = Command::new("gst-launch-1.0");
     cmd.args([
@@ -672,6 +992,14 @@ fn spawn_player(
         "leaky=downstream",
         "!",
     ]);
+    // Only the picture going to the screen; the preview branch keeps its own.
+    if let Some((n, d)) = pixel_aspect {
+        cmd.args([
+            "capssetter",
+            &format!("caps=video/x-raw,pixel-aspect-ratio=(fraction){n}/{d}"),
+            "!",
+        ]);
+    }
     let mut sink = if args.output == "hdmi" {
         // Avoid libdrm probing unrelated drivers during every stream restart.
         "kmssink driver-name=vc4 sync=false".to_owned()
@@ -843,6 +1171,62 @@ pub(crate) fn input_caps(line: &str) -> Option<(u32, u32, Option<f64>)> {
 mod tests {
     use super::*;
     #[test]
+    fn stretch_usb_never_rebuilds_but_stretch_live_does() {
+        let current = crate::settings::Settings::default();
+        let usb = crate::settings::Settings {
+            stretch_usb: true,
+            ..current.clone()
+        };
+        assert!(!must_rebuild(&current, &usb, false));
+        assert!(!must_rebuild(&current, &usb, true));
+        let live = crate::settings::Settings {
+            stretch_live: true,
+            ..current.clone()
+        };
+        assert!(must_rebuild(&current, &live, true));
+    }
+    #[test]
+    fn fill_par_stretches_only_what_does_not_fit() {
+        assert_eq!(fill_par(1440, 1080, 1920, 1080), Some((4, 3)));
+        assert_eq!(fill_par(640, 480, 1920, 1080), Some((4, 3)));
+        assert_eq!(fill_par(1920, 1080, 1920, 1080), None);
+        assert_eq!(fill_par(1280, 720, 1920, 1080), None);
+        assert_eq!(fill_par(1440, 1080, 1024, 768), None);
+        // 16:9 onto a 4:3 screen is squeezed.
+        assert_eq!(fill_par(1920, 1080, 1024, 768), Some((3, 4)));
+        assert_eq!(fill_par(0, 1080, 1920, 1080), None);
+        // Implausible shapes are left alone.
+        assert_eq!(fill_par(100, 1000, 1920, 1080), None);
+    }
+    #[test]
+    fn a_new_idle_screen_never_interrupts_live_video() {
+        let current = crate::settings::Settings::default();
+        let idle = crate::settings::Settings {
+            fallback_image: Some("no-signal.png".into()),
+            ..current.clone()
+        };
+        assert!(!must_rebuild(&current, &idle, true), "deferred while live");
+        assert!(
+            must_rebuild(&current, &idle, false),
+            "applied right away otherwise"
+        );
+        let terminal = crate::settings::Settings {
+            terminal_enabled: true,
+            ..current.clone()
+        };
+        assert!(!must_rebuild(&current, &terminal, true));
+        assert!(!must_rebuild(&current, &terminal, false));
+        let mode = crate::settings::Settings {
+            hdmi_mode: "1280x720@60".into(),
+            ..idle.clone()
+        };
+        assert!(
+            must_rebuild(&current, &mode, true),
+            "other changes still apply"
+        );
+        assert!(!must_rebuild(&current, &current.clone(), false));
+    }
+    #[test]
     fn stats_distinguish_nominal_rate_and_output() {
         assert_eq!(
             frame_stats("last-message = rendered: 42, dropped: 0, current: 29.98, average: 30.01"),
@@ -895,11 +1279,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ungoggled-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let read = |n: &str| std::fs::read(src.join(n)).unwrap();
-        let hevc = crate::assets::upload(&dir, &read("hevc.mp4")).unwrap_err();
+        let hevc = crate::assets::upload(&dir, &read("hevc.mp4"), None).unwrap_err();
         assert!(hevc.to_string().contains("not H.264"), "{hevc}");
-        let uhd = crate::assets::upload(&dir, &read("uhd.mp4")).unwrap_err();
+        let uhd = crate::assets::upload(&dir, &read("uhd.mp4"), None).unwrap_err();
         assert!(uhd.to_string().contains("1920"), "{uhd}");
-        let ok = crate::assets::upload(&dir, &read("h264.mp4")).unwrap();
+        let ok = crate::assets::upload(&dir, &read("h264.mp4"), Some("h264.mp4")).unwrap();
         assert_eq!(ok["kind"], "video");
         let id = ok["id"].as_str().unwrap();
         let video = dir.join(id);

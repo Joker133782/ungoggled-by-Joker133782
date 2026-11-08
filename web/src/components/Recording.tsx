@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, headers } from "../api";
-import type { Recording, RecordingStatus, Settings } from "../types";
+import { api, headers, usePolling } from "../api";
+import type {
+  Recording,
+  RecordingStatus,
+  Settings,
+  UsbVideoStatus,
+} from "../types";
+import { PanelHead } from "./PanelHead";
+import {
+  IconRecord,
+  IconClose,
+  IconPlay,
+  IconStop,
+  IconClip,
+  IconDownload,
+  IconTrash,
+} from "./icons";
 
 const bytes = (n: number) => {
   if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
@@ -15,44 +30,37 @@ const time = (s: number) => {
 const when = (s: number | null) =>
   s ? new Date(s * 1000).toLocaleString() : "unknown date";
 
-/**
- * Record the live goggles feed to the SD card (raw, no re-encoding). Three
- * independent ways to capture: auto-record every flight start to finish,
- * manual start/stop, and a "save the last 30 seconds" shortcut for a moment
- * you didn't plan to record.
+/*
+ * Record the live goggles feed to the SD card (raw, no re-encoding). Four
+ * independent ways to capture: auto-record every flight start to finish, a
+ * crash buffer that auto-saves the last 30 seconds when the feed drops
+ * (like the goggles' own instant-replay), manual start/stop, and a "save
+ * the last 30 seconds" shortcut for a moment you didn't plan to record.
+ *
+ * Split across three tabs, one component each: the buttons pressed
+ * mid-flight (RecordingControls, Live), the set-once switches
+ * (RecordingSettings, Settings) and the saved files (RecordingList, Videos).
+ * Each fetches only what it shows, so a tab that isn't on screen doesn't
+ * poll for it. Switches save through App's single Settings copy
+ * (`settings`/`onSave`), never a copy of their own — see StreamPanel.
  */
-export function RecordingPanel({
+
+/** Manual start/stop and "save the last 30 seconds", on the Live tab. */
+export function RecordingControls({
   diskWarning,
   disabled,
+  settings,
 }: {
   diskWarning?: boolean;
   disabled: boolean;
+  settings: Settings | null;
 }) {
   const [status, setStatus] = useState<RecordingStatus | null>(null);
-  const [recordings, setRecordings] = useState<Recording[] | null>(null);
-  const [settings, setSettings] = useState<Settings | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
-
-  const loadList = useCallback(async () => {
-    try {
-      const r = await api<{ recordings: Recording[] }>("recordings");
-      setRecordings(r.recordings);
-    } catch {
-      /* Receiver may be restarting; the next poll retries. */
-    }
-  }, []);
-  const loadSettings = useCallback(async () => {
-    try {
-      setSettings(await api<Settings>("settings"));
-    } catch {
-      /* Receiver may be restarting; the next poll retries. */
-    }
-  }, []);
-  useEffect(() => {
-    void loadList();
-    void loadSettings();
-  }, [loadList, loadSettings]);
+  // The saved file lands on the Videos tab, out of sight from here, so say
+  // so instead of leaving the button press without any visible result.
+  const [saved, setSaved] = useState("");
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -66,28 +74,16 @@ export function RecordingPanel({
     void poll();
     return () => clearTimeout(timer);
   }, []);
+  useEffect(() => {
+    if (!saved) return;
+    const timer = setTimeout(() => setSaved(""), 10000);
+    return () => clearTimeout(timer);
+  }, [saved]);
 
-  async function setAutoRecord(auto_record: boolean) {
-    if (!settings) return;
-    setBusy("auto");
-    setError("");
-    try {
-      const next = { ...settings, auto_record };
-      await api("settings", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(next),
-      });
-      setSettings(next);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save.");
-    } finally {
-      setBusy(null);
-    }
-  }
   async function start() {
     setBusy("start");
     setError("");
+    setSaved("");
     try {
       await api("recording", { method: "POST", headers });
     } catch (e) {
@@ -100,7 +96,7 @@ export function RecordingPanel({
     setBusy("stop");
     try {
       await api("recording/stop", { method: "POST", headers });
-      await loadList();
+      setSaved("Recording saved.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not stop recording.");
     } finally {
@@ -110,9 +106,10 @@ export function RecordingPanel({
   async function saveBuffer() {
     setBusy("buffer");
     setError("");
+    setSaved("");
     try {
       await api("recording/save-buffer", { method: "POST", headers });
-      await loadList();
+      setSaved("Saved the last 30 seconds.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Nothing recent to save yet.");
     } finally {
@@ -126,6 +123,196 @@ export function RecordingPanel({
       /* Not critical; the monitor notice clears on the next recording anyway. */
     }
   }
+
+  const recording = status?.recording ?? false;
+  return (
+    <section className="panel recording">
+      <PanelHead icon={<IconRecord />} title="Recording" wiki="recording" />
+      {diskWarning && (
+        <p role="alert" className="error">
+          SD card is full; recording stopped. Delete some recordings under{" "}
+          <a href="#videos">Videos</a>, then{" "}
+          <button disabled={disabled} onClick={() => void dismissWarning()}>
+            <IconClose /> dismiss
+          </button>
+        </p>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {recording ? (
+          <button
+            disabled={disabled || busy === "stop"}
+            onClick={() => void stop()}
+          >
+            <IconStop /> Stop recording ({time(status?.seconds ?? 0)},{" "}
+            {bytes(status?.bytes ?? 0)})
+          </button>
+        ) : (
+          <button
+            disabled={disabled || busy === "start"}
+            onClick={() => void start()}
+          >
+            <IconPlay /> Start recording
+          </button>
+        )}
+        <button
+          disabled={disabled || busy === "buffer"}
+          onClick={() => void saveBuffer()}
+        >
+          <IconClip /> Save last 30 seconds now
+        </button>
+      </div>
+      {saved && (
+        <p role="status" className="status-line">
+          {saved} <a href="#videos">Show in Videos</a>
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      {settings && (
+        <p className="status-line">
+          Auto-record {settings.auto_record ? "on" : "off"} · crash buffer{" "}
+          {settings.crash_buffer ? "on" : "off"} ·{" "}
+          <a href="#settings/recording-settings">change</a>
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The set-once recording switches, on the Settings tab. */
+export function RecordingSettings({
+  disabled,
+  settings,
+  onSave,
+}: {
+  disabled: boolean;
+  settings: Settings | null;
+  onSave: (next: Settings) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const { value: usbStatus } = usePolling<UsbVideoStatus>(
+    "usb-videos/status",
+    3000,
+  );
+  const drives = usbStatus?.drives ?? [];
+
+  async function setAutoRecord(auto_record: boolean) {
+    if (!settings) return;
+    setBusy("auto");
+    setError("");
+    try {
+      await onSave({ ...settings, auto_record });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save.");
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function setCrashBuffer(crash_buffer: boolean) {
+    if (!settings) return;
+    setBusy("crash");
+    setError("");
+    try {
+      await onSave({ ...settings, crash_buffer });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save.");
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function setRecordToUsb(record_to_usb: boolean) {
+    if (!settings) return;
+    setBusy("record_to_usb");
+    setError("");
+    try {
+      await onSave({ ...settings, record_to_usb });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="panel recording-settings" id="recording-settings">
+      <PanelHead icon={<IconRecord />} title="Recording" wiki="recording" />
+      {settings && (
+        <ul className="toggle-list">
+          <li>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={settings.auto_record}
+                disabled={disabled || busy === "auto"}
+                onChange={(e) => void setAutoRecord(e.currentTarget.checked)}
+              />
+              Auto-record every flight
+            </label>
+          </li>
+          <li>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={settings.crash_buffer}
+                disabled={disabled || busy === "crash"}
+                onChange={(e) => void setCrashBuffer(e.currentTarget.checked)}
+              />
+              Crash buffer (last 30 seconds)
+            </label>
+          </li>
+          <li>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={settings.record_to_usb}
+                disabled={disabled || busy === "record_to_usb"}
+                onChange={(e) => void setRecordToUsb(e.currentTarget.checked)}
+              />
+              Record to USB drive instead of SD card
+            </label>
+            <span className="help">
+              {drives.length > 0
+                ? `Detected: ${drives.join(", ")}`
+                : "No USB drive detected — recordings stay on the SD card until one is plugged in."}
+            </span>
+          </li>
+        </ul>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Saved recordings, clips and flights, on the Videos tab: play one on the
+ * HDMI output, download it or delete it. Pause, seek and stop for a playing
+ * recording appear in the USB player panel, which drives the same player.
+ */
+export function RecordingList({ disabled }: { disabled: boolean }) {
+  const [recordings, setRecordings] = useState<Recording[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const loadList = useCallback(async () => {
+    try {
+      const r = await api<{ recordings: Recording[] }>("recordings");
+      setRecordings(r.recordings);
+    } catch {
+      /* Receiver may be restarting; the next poll retries. */
+    }
+  }, []);
+  useEffect(() => {
+    void loadList();
+  }, [loadList]);
+
   async function play(name: string) {
     setBusy(name);
     try {
@@ -148,67 +335,9 @@ export function RecordingPanel({
     }
   }
 
-  const recording = status?.recording ?? false;
   return (
-    <section className="panel recording">
-      <h2>Recording</h2>
-      <p className="help">
-        Everything here writes the live goggles feed to the SD card unmodified
-        (no re-encoding). The goggles' own on-screen display (battery, channel,
-        signal) is part of the picture if the goggles have it turned on; that is
-        set on the goggles/DJI Fly, not here.
-      </p>
-      {diskWarning && (
-        <p role="alert" className="error">
-          SD card is full; recording stopped. Delete some recordings below, then{" "}
-          <button disabled={disabled} onClick={() => void dismissWarning()}>
-            dismiss
-          </button>
-        </p>
-      )}
-      {settings && (
-        <p>
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={settings.auto_record}
-              disabled={disabled || busy === "auto"}
-              onChange={(e) => void setAutoRecord(e.currentTarget.checked)}
-            />
-            Auto-record every flight
-          </label>
-          <span className="help">
-            {" "}
-            — buffers in RAM while the feed is live, saves to the SD card as
-            soon as it drops, keeps the 5 most recent flights (oldest deleted
-            automatically).
-          </span>
-        </p>
-      )}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {recording ? (
-          <button
-            disabled={disabled || busy === "stop"}
-            onClick={() => void stop()}
-          >
-            Stop recording ({time(status?.seconds ?? 0)},{" "}
-            {bytes(status?.bytes ?? 0)})
-          </button>
-        ) : (
-          <button
-            disabled={disabled || busy === "start"}
-            onClick={() => void start()}
-          >
-            Start recording
-          </button>
-        )}
-        <button
-          disabled={disabled || busy === "buffer"}
-          onClick={() => void saveBuffer()}
-        >
-          Save last 30 seconds
-        </button>
-      </div>
+    <section className="panel recording-files">
+      <PanelHead icon={<IconRecord />} title="Recordings" wiki="recording" />
       {error && (
         <p role="alert" className="error">
           {error}
@@ -244,16 +373,18 @@ export function RecordingPanel({
                   disabled={disabled || busy === r.name}
                   onClick={() => void play(r.name)}
                 >
-                  Play on HDMI
+                  <IconPlay /> Play on HDMI
                 </button>
                 <a href={`/api/recordings/${r.name}`}>
-                  <button disabled={disabled}>Download</button>
+                  <button disabled={disabled}>
+                    <IconDownload /> Download
+                  </button>
                 </a>
                 <button
                   disabled={disabled || busy === r.name}
                   onClick={() => void remove(r.name)}
                 >
-                  Delete
+                  <IconTrash /> Delete
                 </button>
               </div>
             </li>

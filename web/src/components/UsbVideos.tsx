@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, headers } from "../api";
+import { number } from "../format";
 import type { UsbVideo, UsbVideoStatus } from "../types";
+import { PanelHead } from "./PanelHead";
+import { IconUsb, IconPlay, IconPause, IconStop, IconReconnect } from "./icons";
 
 const bytes = (n: number) => {
   if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
@@ -13,6 +16,13 @@ const time = (s: number) => {
   const sec = total % 60;
   return `${m}:${sec.toString().padStart(2, "0")}`;
 };
+const when = (unixSeconds: number) =>
+  new Date(unixSeconds * 1000).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
 /**
  * Videos found on USB drives plugged into a host port, playable on the HDMI
@@ -20,7 +30,20 @@ const time = (s: number) => {
  * support depend on what the Pi's mpv/GStreamer install can decode, which
  * this page cannot know in advance.
  */
-export function UsbVideos({ disabled }: { disabled: boolean }) {
+export function UsbVideos({
+  disabled,
+  speed,
+  fps,
+  clipFps,
+}: {
+  disabled: boolean;
+  /** Playback speed, 1 = real time; null while it is still being measured. */
+  speed: number | null;
+  /** New pictures per second that reach the screen. */
+  fps: number | null;
+  /** The clip's own frame rate. */
+  clipFps: number | null;
+}) {
   const [videos, setVideos] = useState<UsbVideo[] | null>(null);
   const [status, setStatus] = useState<UsbVideoStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -39,11 +62,38 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
   useEffect(() => {
     void loadList();
   }, [loadList]);
+  // Read inside the poll loop below without re-subscribing it on every list
+  // update (it already re-fetches the list itself — see thumbnailRetriesLeft
+  // below — so depending on `videos` directly would restart this loop on its
+  // own output).
+  const videosRef = useRef(videos);
+  useEffect(() => {
+    videosRef.current = videos;
+  }, [videos]);
+  const thumbnailRetriesLeft = useRef(3);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        setStatus(await api<UsbVideoStatus>("usb-videos/status"));
+        const s = await api<UsbVideoStatus>("usb-videos/status");
+        setStatus(s);
+        // A background thumbnailing pass can finish between two polls —
+        // even start *and* finish between them, now that a thumbnail is a
+        // single un-seeked frame grab rather than something slow enough to
+        // reliably catch "in progress". So rather than watching for a
+        // scanning-to-idle transition (which a fast pass can simply never
+        // show), just check on every idle tick whether a clip we know about
+        // still has no thumbnail, and re-fetch the list if so — picking up
+        // anything list_videos() already retried for us. Bounded, since a
+        // clip mpv can never open would otherwise retry forever.
+        if (
+          !s.scan &&
+          thumbnailRetriesLeft.current > 0 &&
+          videosRef.current?.some((v) => !v.thumbnail)
+        ) {
+          thumbnailRetriesLeft.current -= 1;
+          void loadList();
+        }
       } catch {
         /* Receiver may be restarting; the next tick retries. */
       }
@@ -51,11 +101,44 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
     };
     void poll();
     return () => clearTimeout(timer);
-  }, []);
+  }, [loadList]);
+  // The list itself is only ever fetched above (on mount) or from Rescan —
+  // re-fetch it whenever the set of attached drives actually changes, so an
+  // unplugged drive's clips are purged (and a newly plugged one's appear)
+  // without the user having to notice and click Rescan themselves.
+  const drivesKey = status?.drives.join("\0") ?? "";
+  const lastDrivesKey = useRef(drivesKey);
+  useEffect(() => {
+    if (drivesKey !== lastDrivesKey.current) {
+      lastDrivesKey.current = drivesKey;
+      thumbnailRetriesLeft.current = 3;
+      void loadList();
+    }
+  }, [drivesKey, loadList]);
 
   async function play(video: UsbVideo) {
     setBusy(video.id);
     setError("");
+    // A drag on the previous clip's seek bar left this set, and it
+    // overrides status.position in the render below — switching clips
+    // without clearing it kept showing the old clip's last scrub position
+    // forever (not just until the next poll, since nothing else resets it).
+    setScrub(null);
+    // Optimistic: show the new clip at 0:00 immediately, rather than the
+    // previous clip's stale position/duration until the next 1s status poll
+    // catches up with the switch.
+    setStatus((s) =>
+      s
+        ? {
+            ...s,
+            playing: true,
+            name: video.name,
+            position: 0,
+            duration: 0,
+            paused: false,
+          }
+        : s,
+    );
     try {
       await api(`usb-videos/${video.id}/play`, { method: "POST", headers });
     } catch (e) {
@@ -68,7 +151,7 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
     setBusy("stop");
     try {
       await api("usb-videos/stop", { method: "POST", headers });
-      setStatus({ playing: false });
+      setStatus((s) => (s ? { ...s, playing: false } : s));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not stop playback.");
     } finally {
@@ -111,12 +194,29 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
 
   return (
     <section className="panel usb-videos">
-      <h2>USB videos (experimental)</h2>
+      <PanelHead
+        icon={<IconUsb />}
+        title="USB - ActionCam Video Player"
+        experimental
+        wiki="usb"
+      />
       <p className="help">
-        Plug an action camera or USB drive into one of the Pi's regular USB-A
-        ports (not the goggles port) to list its video files here and play one
-        on the HDMI output. Not hardware-verified for every camera and codec.
+        {status && status.drives.length > 0
+          ? `Detected: ${status.drives.join(", ")}`
+          : "No USB drive detected."}
       </p>
+      {status?.scan && (
+        <div className="usb-scan">
+          <progress
+            max={Math.max(1, status.scan.total)}
+            value={status.scan.done}
+            aria-label="Scanning for videos"
+          />
+          <span className="help">
+            Generating thumbnails… {status.scan.done}/{status.scan.total}
+          </span>
+        </div>
+      )}
       {playing && (
         <div className="usb-now-playing">
           <p className="help">Playing on the HDMI output</p>
@@ -136,24 +236,44 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
             <span>{time(position)}</span>
             <span>{time(duration)}</span>
           </div>
+          <p className="help usb-rate">
+            {status?.paused
+              ? "Paused"
+              : speed == null
+                ? "Measuring speed…"
+                : `${number(fps ?? 0)} fps on screen · ${number(speed, 2)}× speed${
+                    speed >= 0.97 ? " (real time)" : ""
+                  }${clipFps ? ` · clip is ${number(clipFps)} fps` : ""}`}
+          </p>
           <div style={{ display: "flex", gap: 8 }}>
             <button
               disabled={disabled || busy === "pause" || status?.paused == null}
               onClick={() => void togglePause()}
             >
-              {status?.paused ? "Resume" : "Pause"}
+              {status?.paused ? (
+                <>
+                  <IconPlay /> Resume
+                </>
+              ) : (
+                <>
+                  <IconPause /> Pause
+                </>
+              )}
             </button>
             <button
               disabled={disabled || busy === "stop"}
               onClick={() => void stop()}
             >
-              Stop
+              <IconStop /> Stop
             </button>
           </div>
         </div>
       )}
-      <button disabled={videos === null} onClick={() => void loadList()}>
-        Rescan
+      <button
+        disabled={videos === null || !!status?.scan}
+        onClick={() => void loadList()}
+      >
+        <IconReconnect /> Rescan
       </button>
       {error && (
         <p role="alert" className="error">
@@ -167,18 +287,19 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
         <ul className="usb-video-list">
           {videos.map((v) => (
             <li key={v.id}>
-              <Thumbnail video={v} />
+              <Thumbnail video={v} scanning={!!status?.scan} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 {v.name}
                 <div className="help">
                   {v.device} · {bytes(v.size)}
+                  {v.mtime != null ? ` · ${when(v.mtime)}` : ""}
                 </div>
               </div>
               <button
                 disabled={disabled || busy === v.id}
                 onClick={() => void play(v)}
               >
-                Play
+                <IconPlay /> Play
               </button>
             </li>
           ))}
@@ -188,10 +309,42 @@ export function UsbVideos({ disabled }: { disabled: boolean }) {
   );
 }
 
-/** Falls back to a plain placeholder box until a thumbnail exists or if the file never gets one. */
-function Thumbnail({ video }: { video: UsbVideo }) {
-  const [failed, setFailed] = useState(false);
-  if (!video.thumbnail || failed) {
+/**
+ * Falls back to a plain placeholder box until a thumbnail exists. Thumbnails
+ * are generated in the background after the file list itself appears, so
+ * while a scan is running this polls for one instead of giving up after the
+ * first miss — only switching to the `<img>` once a HEAD request confirms
+ * the file is there, to avoid a flash of a broken-image icon in between.
+ */
+function Thumbnail({
+  video,
+  scanning,
+}: {
+  video: UsbVideo;
+  scanning: boolean;
+}) {
+  const [ready, setReady] = useState(video.thumbnail);
+  useEffect(() => {
+    if (ready || !scanning) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const r = await fetch(`/api/usb-videos/${video.id}/thumbnail`, {
+          method: "HEAD",
+          cache: "no-store",
+        });
+        if (!cancelled && r.ok) setReady(true);
+      } catch {
+        /* retried on the next tick */
+      }
+    };
+    const timer = setInterval(() => void check(), 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [ready, scanning, video.id]);
+  if (!ready) {
     return (
       <div className="usb-thumbnail usb-thumbnail-empty" aria-hidden="true" />
     );
@@ -201,7 +354,7 @@ function Thumbnail({ video }: { video: UsbVideo }) {
       className="usb-thumbnail"
       src={`/api/usb-videos/${video.id}/thumbnail`}
       alt=""
-      onError={() => setFailed(true)}
+      onError={() => setReady(false)}
     />
   );
 }

@@ -8,6 +8,13 @@ export function modeLabel(mode: string): string {
   if (!m) return mode;
   return `${m[1]} × ${m[2]} · ${m[3]} Hz${scan(m[4] === "i")}`;
 }
+export function agoLabel(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem === 0 ? `${m} min ago` : `${m}m ${rem}s ago`;
+}
 export function skewLabel(deltaMs: number): string {
   const behind = deltaMs > 0;
   const sec = Math.max(1, Math.round(Math.abs(deltaMs) / 1000));

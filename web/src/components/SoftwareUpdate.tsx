@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { api, headers, usePolling } from "../api";
-import { repository } from "../release-version";
-import type { useReleases } from "../releases";
+import type { useNextcloudRelease } from "../nextcloud";
+import { download as downloadFromNextcloud } from "../nextcloud";
+import { PanelHead } from "./PanelHead";
+import {
+  IconUpdate,
+  IconReconnect,
+  IconDownload,
+  IconUpload,
+  IconCheck,
+  IconClock,
+} from "./icons";
 type UpdateState = {
   id: string | null;
   phase: string;
@@ -35,17 +44,40 @@ function remember(id: string | null) {
 }
 const active = (phase?: string) =>
   ["queued", "installing", "restarting"].includes(phase ?? "");
+function bytes(n: number): string {
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+/** How long a check result counts as current before the next visit re-checks. */
+const RECHECK_MS = 5 * 60 * 1000;
+
 export function SoftwareUpdate({
-  releases,
+  nextcloud,
   showRelease,
   setShowRelease,
   onBusy,
+  visible,
 }: {
-  releases: ReturnType<typeof useReleases>;
+  nextcloud: ReturnType<typeof useNextcloudRelease>;
   showRelease: boolean;
   setShowRelease: (v: boolean) => void;
   onBusy: (v: boolean) => void;
+  /** Whether the System tab (where this panel lives) is on screen. */
+  visible: boolean;
 }) {
+  // Checking for updates doubles as the reachability probe: opening the tab
+  // shows straight away whether this phone can get updates from here, or
+  // needs a file instead. Quietly re-checked when the phone comes back
+  // online, and on a later visit once the last result is a few minutes old.
+  const { check, checkedAt } = nextcloud;
+  useEffect(() => {
+    if (!visible) return;
+    if (checkedAt == null || Date.now() - checkedAt > RECHECK_MS) void check();
+    const online = () => void check();
+    window.addEventListener("online", online);
+    return () => window.removeEventListener("online", online);
+    // checkedAt only gates the check on arrival, it isn't a trigger.
+  }, [visible, check]);
   const { value: polled, error: pollingError } = usePolling<Info>(
     "update",
     1000,
@@ -59,6 +91,10 @@ export function SoftwareUpdate({
   const [sending, setSending] = useState(false);
   const request = useRef<XMLHttpRequest | null>(null);
   const previousBuild = useRef<string | undefined>(undefined);
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [downloadError, setDownloadError] = useState("");
+  const [splash, setSplash] = useState(false);
+  const expectSplash = useRef(false);
   // The immediate upload result bridges the next status poll only.
   const state = uploaded ?? polled?.state;
   const busy = active(state?.phase) || sending || !!pending;
@@ -95,6 +131,12 @@ export function SoftwareUpdate({
       window.location.reload();
     previousBuild.current = polled.current_build;
   }, [polled, pending, sending]);
+  useEffect(() => {
+    if (expectSplash.current && state?.phase === "ready") {
+      expectSplash.current = false;
+      setSplash(true);
+    }
+  }, [state?.phase]);
   const uploadDisabled = !polled?.available || busy || progress !== null;
   function upload(file: File) {
     if (file.size > 64 * 1024 * 1024) {
@@ -137,7 +179,26 @@ export function SoftwareUpdate({
     form.append("update", file);
     xhr.send(form);
   }
-  async function install() {
+  async function downloadAndStage() {
+    if (!nextcloud.latest) return;
+    setDownloadError("");
+    setDownloadProgress(0);
+    try {
+      const file = await downloadFromNextcloud(
+        nextcloud.latest,
+        setDownloadProgress,
+      );
+      setDownloadProgress(null);
+      expectSplash.current = true;
+      upload(file);
+    } catch (e) {
+      setDownloadProgress(null);
+      setDownloadError(
+        e instanceof Error ? e.message : "Could not download the update.",
+      );
+    }
+  }
+  async function install(skipHealthCheck = false) {
     if (!state?.id) return;
     setError("");
     setSending(true);
@@ -147,7 +208,10 @@ export function SoftwareUpdate({
       await api("update/install", {
         method: "POST",
         headers,
-        body: JSON.stringify({ id: state.id }),
+        body: JSON.stringify({
+          id: state.id,
+          skip_health_check: skipHealthCheck,
+        }),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start update.");
@@ -158,47 +222,79 @@ export function SoftwareUpdate({
       setUploaded(null);
     }
   }
+  // The exact wording install.rs's switch() wraps a failed health check
+  // in — only then does retrying without one make sense; some other
+  // failure (a corrupt package, a migration error) needs a fresh upload
+  // or a different fix instead, not skipping the check.
+  const canRetryWithoutHealthCheck =
+    state?.phase === "rolled_back" &&
+    !!state.id &&
+    state.message.includes("did not pass its health check");
   return (
     <section className="panel software-update" id="software-update">
-      <div className="section-title">
-        <h2>Software update</h2>
+      <PanelHead icon={<IconUpdate />} title="Software update" wiki="updates">
         <span>v{polled?.current_version ?? "—"}</span>
-      </div>
+      </PanelHead>
+      <Reachability nextcloud={nextcloud} />
       <div className="actions">
         <button
-          disabled={releases.checking}
-          onClick={() => void releases.check(true)}
+          disabled={nextcloud.checking}
+          onClick={() => void nextcloud.check()}
         >
-          {releases.checking ? "Checking…" : "Check releases"}
+          <IconReconnect />{" "}
+          {nextcloud.checking
+            ? "Checking…"
+            : nextcloud.checked
+              ? "Check again"
+              : "Check for updates"}
         </button>
-        <a href={`${repository}/releases`} target="_blank" rel="noreferrer">
-          GitHub releases ↗
-        </a>
       </div>
-      {releases.latest && (
+      {nextcloud.latest && (
         <div className="release-summary">
           <button onClick={() => setShowRelease(!showRelease)}>
-            v{releases.latest.version} available ·{" "}
+            <IconUpdate /> v{nextcloud.latest.version} available (
+            {bytes(nextcloud.latest.size)}) ·{" "}
             {showRelease ? "Hide" : "Release notes"}
           </button>
           {showRelease && (
             <div className="release-details">
-              <h3>{releases.latest.name}</h3>
-              <div className="release-notes">{releases.latest.notes}</div>
-              <a href={releases.latest.url} target="_blank" rel="noreferrer">
-                Open release on GitHub ↗
-              </a>
+              <h3>What&apos;s new in v{nextcloud.latest.version}</h3>
+              <ul className="release-notes-list">
+                {nextcloud.latest.notes.map((note, i) => (
+                  <li key={i}>{note}</li>
+                ))}
+              </ul>
             </div>
           )}
+          <div className="actions">
+            <button
+              className="primary"
+              disabled={downloadProgress !== null || busy}
+              onClick={() => void downloadAndStage()}
+            >
+              <IconDownload /> Download
+            </button>
+            {downloadProgress !== null && (
+              <>
+                <progress
+                  max={100}
+                  value={downloadProgress}
+                  aria-label="Update download"
+                />
+                <span>
+                  {downloadProgress === 100
+                    ? "Finishing…"
+                    : `${downloadProgress}%`}
+                </span>
+              </>
+            )}
+          </div>
+          {downloadError && (
+            <p role="alert" className="error">
+              {downloadError}
+            </p>
+          )}
         </div>
-      )}
-      {releases.error ? (
-        <p className="help">{releases.error} File uploads work offline.</p>
-      ) : (
-        releases.checked &&
-        !releases.latest && (
-          <p className="help">No newer stable release found.</p>
-        )
       )}
       {polled && !polled.available && (
         <p className="help">
@@ -231,7 +327,7 @@ export function SoftwareUpdate({
       >
         <div className="actions update-upload">
           <label className={`button ${uploadDisabled ? "disabled" : ""}`}>
-            Upload update
+            <IconUpload /> Upload update
             <input
               className="file-input"
               type="file"
@@ -272,7 +368,7 @@ export function SoftwareUpdate({
             disabled={busy || progress !== null}
             onClick={() => void install()}
           >
-            Install v{state.version}
+            <IconCheck /> Install v{state.version}
           </button>
         </div>
       )}
@@ -292,6 +388,19 @@ export function SoftwareUpdate({
             {state.message}
           </p>
         )}
+      {canRetryWithoutHealthCheck && (
+        <div className="update-skip-health-check">
+          <p className="help">
+            If the new version actually looked fine on the HDMI screen before
+            this reverted it, the health check itself may be wrong rather than
+            the update — this has happened before. Skipping it keeps the new
+            version without that automatic verification.
+          </p>
+          <button disabled={busy} onClick={() => void install(true)}>
+            <IconCheck /> Retry v{state?.version} without the health check
+          </button>
+        </div>
+      )}
       {!!state?.warnings.length && (
         <ul>
           {state.warnings.map((w) => (
@@ -304,6 +413,109 @@ export function SoftwareUpdate({
           {error || polled?.error || "Cannot reach the receiver."}
         </p>
       )}
+      <UpdateReadySplash
+        open={splash}
+        version={state?.version ?? ""}
+        notes={nextcloud.latest?.notes ?? []}
+        busy={busy}
+        onInstallNow={() => {
+          setSplash(false);
+          void install();
+        }}
+        onInstallLater={() => setSplash(false)}
+      />
     </section>
+  );
+}
+/**
+ * One quiet line (dot + text) saying whether this phone can reach the update
+ * server — the Pi itself never does; the phone downloads and hands the file
+ * over. Offline isn't an error, just a pointer to the file upload instead.
+ */
+function Reachability({
+  nextcloud,
+}: {
+  nextcloud: ReturnType<typeof useNextcloudRelease>;
+}) {
+  const { reach, latest, error } = nextcloud;
+  const tone =
+    reach === "checking" || reach === "unchecked"
+      ? "neutral"
+      : reach === "reachable"
+        ? latest
+          ? "found"
+          : "good"
+        : "warn";
+  const text =
+    reach === "unchecked"
+      ? "Not checked for updates yet."
+      : reach === "checking"
+        ? "Checking whether this phone can reach the update server…"
+        : reach === "reachable"
+          ? latest
+            ? `Update found: v${latest.version}.`
+            : "Update server reachable from this phone. You're up to date."
+          : reach === "offline"
+            ? "This phone can't reach the update server right now (no internet here?). Upload an update file below instead."
+            : `${error || "The update server answered with an error"}. Upload an update file below instead.`;
+  return (
+    <p className={`reach ${tone}`} role="status">
+      <i aria-hidden="true" />
+      <span>{text}</span>
+    </p>
+  );
+}
+function UpdateReadySplash({
+  open,
+  version,
+  notes,
+  busy,
+  onInstallNow,
+  onInstallLater,
+}: {
+  open: boolean;
+  version: string;
+  notes: string[];
+  busy: boolean;
+  onInstallNow: () => void;
+  onInstallLater: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+  return (
+    <dialog
+      ref={ref}
+      className="confirm update-splash"
+      onCancel={(e) => {
+        e.preventDefault();
+        if (!busy) onInstallLater();
+      }}
+    >
+      <h3>v{version} downloaded and ready</h3>
+      {notes.length > 0 && (
+        <ul className="release-notes-list">
+          {notes.map((note, i) => (
+            <li key={i}>{note}</li>
+          ))}
+        </ul>
+      )}
+      <p className="help">
+        Install now, or install later from the Software update section — the
+        download stays on the Pi either way.
+      </p>
+      <div className="actions">
+        <button disabled={busy} onClick={onInstallLater}>
+          <IconClock /> Install later
+        </button>
+        <button className="primary" disabled={busy} onClick={onInstallNow}>
+          <IconCheck /> {busy ? "Working…" : "Install now"}
+        </button>
+      </div>
+    </dialog>
   );
 }

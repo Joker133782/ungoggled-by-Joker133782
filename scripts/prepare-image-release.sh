@@ -7,7 +7,7 @@ arch=aarch64
 cargo build --release --target "$target"
 (cd web && npm ci --cache /tmp/dji-npm-cache --fetch-retries=0 && npm run build)
 binary=target/$target/release/ungoggled
-version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+version=$(python3 scripts/version.py --check)
 # Include UI and installer changes in the release identity, not only the binary.
 digest=$(tar -cf - "$binary" web/dist scripts/install-release.sh scripts/prepare-pi.sh deploy/dji-hdmi.service | sha256sum | cut -c1-12)
 name=ungoggled-$version-$arch

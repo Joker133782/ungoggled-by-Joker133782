@@ -26,6 +26,10 @@ if [[ ! -f build/image/rootfs/etc/os-release ]]; then
     unshare --user --map-root-user --map-auto --mount debugfs -R 'rdump / build/image/rootfs' build/image/root.ext4
 fi
 unshare --user --map-root-user --map-auto --mount python3 scripts/restore-image-modes.py build/image/root.ext4 build/image/rootfs
+bundle="build/releases/ungoggled-$version-aarch64"
+rm -rf build/image/rootfs/tmp/dji-release
+mkdir -p build/image/rootfs/tmp
+cp -a "$bundle" build/image/rootfs/tmp/dji-release
 unshare --user --map-root-user --map-auto --mount python3 scripts/configure-image.py build/image/rootfs
 unshare --user --map-root-user --map-auto --mount --pid --fork --kill-child scripts/image-chroot.sh build/image/rootfs /bin/bash /tmp/dji-provision.sh
 unshare --user --map-root-user --map-auto --mount --pid --fork --kill-child scripts/image-chroot.sh build/image/rootfs /bin/bash /tmp/dji-check-image.sh
@@ -36,10 +40,23 @@ unshare --user --map-root-user --map-auto --mount chroot build/image/rootfs /bin
 unshare --user --map-root-user --map-auto --mount python3 - <<'PY'
 from pathlib import Path
 boot=Path('build/image/rootfs/boot/firmware')
-p=boot/'config.txt';s=p.read_text();s+='\n[all]\n# ungoggled USB accessory controller\ndtoverlay=dwc2,dr_mode=peripheral\n';p.write_text(s)
+p=boot/'config.txt';s=p.read_text()
+# The CMA pool size, core_freq_min and the HEVC decoder module + overlay are
+# not written here: `ungoggled system-fixes` below does that, the same code an
+# update runs on an existing Pi (src/system_fixes.rs, where the reasons for
+# each value are documented), so a fresh image and an updated Pi match.
+s+='\n[all]\n# ungoggled USB accessory controller\ndtoverlay=dwc2,dr_mode=peripheral\n'
+p.write_text(s)
 p=boot/'cmdline.txt';parts=p.read_text().split();parts=[p for p in parts if not p.startswith(('init=','systemd.run=','systemd.run_success_action=','systemd.unit=','video=HDMI-A-1:', 'cfg80211.ieee80211_regdom='))];country=Path('build/image/rootfs/etc/dji-hdmi/radio-country').read_text().strip();parts+=['video=HDMI-A-1:1920x1080@60D', f'cfg80211.ieee80211_regdom={country}'];p.write_text(' '.join(parts)+'\n')
 PY
-unshare --user --map-root-user --map-auto --mount chroot build/image/rootfs /bin/bash -c 'mcopy -o -i /tmp/dji-boot.fat /boot/firmware/config.txt /boot/firmware/cmdline.txt ::/'
+# Kernel release of the image itself (uname -r inside the chroot is the host's).
+kernel_release=$(cd build/image/rootfs/lib/modules && ls -d -- *-rpi-v8)
+[[ $(wc -w <<< "$kernel_release") == 1 ]] || { echo "expected one rpi-v8 kernel, found: $kernel_release" >&2; exit 1; }
+# --strict: the image build fails rather than ship without a fix (e.g. if the
+# base image's kernel no longer matches the embedded module).
+unshare --user --map-root-user --map-auto --mount --pid --fork --kill-child scripts/image-chroot.sh build/image/rootfs /opt/dji-hdmi/current/bin/ungoggled system-fixes apply --offline --strict --kernel-release "$kernel_release"
+unshare --user --map-root-user --map-auto --mount chroot build/image/rootfs /bin/bash -c 'mcopy -o -i /tmp/dji-boot.fat /boot/firmware/config.txt /boot/firmware/cmdline.txt ::/ && mcopy -o -i /tmp/dji-boot.fat /boot/firmware/overlays/ungoggled-hevc-cma.dtbo ::/overlays/'
+
 mv build/image/rootfs/tmp/dji-boot.fat build/image/boot.fat
 # Remove build-only content and reset machine-specific state.
 unshare --user --map-root-user --map-auto --mount python3 - <<'PY'

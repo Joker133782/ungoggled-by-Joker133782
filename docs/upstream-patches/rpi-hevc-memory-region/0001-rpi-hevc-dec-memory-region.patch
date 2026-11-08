@@ -1,0 +1,322 @@
+From 79349211dd74de0ff03d0eeb3763fb7571c06780 Mon Sep 17 00:00:00 2001
+From: placeholder <placeholder@example.invalid>
+Date: Sat, 31 Oct 2026 09:39:28 +0100
+Subject: [PATCH] media: rpi-hevc-dec: support a dedicated memory-region for
+ internal buffers
+
+The decoder allocates ~45 MiB of private working buffers at STREAMON for a
+3840x2880 stream (3 x (3 MiB PU + 12 MiB coeff), plus cmd FIFOs and colmv
+buffers). These are only ever accessed by the decoder (which can address
+all of RAM: 36-bit DMA mask, VC_ADDR = addr >> 6), but they currently come
+from the default CMA pool, which on BCM2711 must sit below 1 GiB because
+the HVS can only scan out from the first 1 GiB. Userspace (e.g. GStreamer
+v4l2slh265dec, or any V4L2 stateless-API client that pre-sizes its buffer
+pool off the stream's declared level) can already have filled that pool
+with capture buffers by the time STREAMON is called, so STREAMON fails
+with -ENOMEM on footage whose level undersells its actual resolution
+(reproduced with 3840x2880 10-bit HEVC: level 5.2, a 16+3 frame DPB
+pre-allocation of ~440 MiB against the default 512 MiB pool).
+
+A "memory-region" property on the decoder node was silently ignored
+because the driver never called of_reserved_mem_device_init*(). Attach
+the region to a child "memdev" device (same pattern as s5p_mfc_alloc_memdev())
+and use it, in preference to the default pool, for the decoder's internal
+buffers only. vb2 frame/bitstream buffers stay on the platform device /
+default CMA so they remain reachable by the display. Each internal buffer
+records the device it was allocated from, so a too-small region falls back
+per-buffer to the default pool and frees go to the right pool.
+
+Also fix the Coeff allocation failure message, which printed pu_size
+(a quarter of the size actually requested) instead of coeff_size.
+
+No behaviour change when no memory-region is present.
+
+Tested on a Raspberry Pi 4 (BCM2711, rpi-6.18.y) with a 3840x2880 10-bit
+HEVC stream that reliably failed STREAMON with -ENOMEM against the
+default 512 MiB CMA pool: with a 128 MiB memory-region attached and that
+default pool otherwise untouched, the same stream decodes via
+GStreamer's v4l2slh265dec, bit-exact against software decode across
+repeated runs, with clean module load/unload and no change in behaviour
+when the memory-region property is absent.
+
+Signed-off-by: PLACEHOLDER_NAME <PLACEHOLDER_EMAIL>
+---
+ .../platform/raspberrypi/hevc_dec/hevc_d.c    | 95 ++++++++++++++++++-
+ .../platform/raspberrypi/hevc_dec/hevc_d.h    | 11 +++
+ .../raspberrypi/hevc_dec/hevc_d_h265.c        | 54 ++++++++---
+ 3 files changed, 146 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/media/platform/raspberrypi/hevc_dec/hevc_d.c b/drivers/media/platform/raspberrypi/hevc_dec/hevc_d.c
+index 392fd40..023e3cc 100644
+--- a/drivers/media/platform/raspberrypi/hevc_dec/hevc_d.c
++++ b/drivers/media/platform/raspberrypi/hevc_dec/hevc_d.c
+@@ -14,6 +14,10 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/platform_device.h>
+ #include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/of_reserved_mem.h>
++#include <linux/slab.h>
+ 
+ #include <media/v4l2-device.h>
+ #include <media/v4l2-ioctl.h>
+@@ -198,6 +202,81 @@ static const struct media_device_ops hevc_d_m2m_media_ops = {
+ 	.req_queue	= hevc_d_media_req_queue,
+ };
+ 
++/*
++ * Child device used to allocate the decoder's internal working buffers from a
++ * dedicated reserved-memory region, if the DT node has a "memory-region".
++ *
++ * The region is deliberately not attached to the platform device itself:
++ * that would also move all vb2 (frame) buffers into it, and frame buffers
++ * may have to be scanned out by a display controller with tighter DMA
++ * addressing limits than the decoder (e.g. the BCM2711 HVS can only reach
++ * the first 1GB, whereas the decoder can address the whole of RAM).
++ *
++ * Same pattern as s5p_mfc_alloc_memdev().
++ */
++struct hevc_d_memdev {
++	struct device dev;
++	u64 dma_mask;
++};
++
++static void hevc_d_memdev_release(struct device *dev)
++{
++	struct hevc_d_memdev *md = container_of(dev, struct hevc_d_memdev, dev);
++
++	of_reserved_mem_device_release(dev);
++	kfree(md);
++}
++
++static struct device *hevc_d_memdev_create(struct device *parent)
++{
++	struct hevc_d_memdev *md;
++	struct device *child;
++	int ret;
++
++	if (!of_property_present(parent->of_node, "memory-region"))
++		return NULL;
++
++	md = kzalloc(sizeof(*md), GFP_KERNEL);
++	if (!md)
++		return ERR_PTR(-ENOMEM);
++
++	child = &md->dev;
++	device_initialize(child);
++	child->parent = parent;
++	child->release = hevc_d_memdev_release;
++	md->dma_mask = dma_get_mask(parent);
++	child->dma_mask = &md->dma_mask;
++	child->coherent_dma_mask = parent->coherent_dma_mask;
++
++	ret = dev_set_name(child, "%s:mem", dev_name(parent));
++	if (ret)
++		goto err_put;
++
++	/* Inherit the decoder node's DMA configuration (ranges, coherency) */
++	ret = of_dma_configure(child, parent->of_node, true);
++	if (ret)
++		goto err_put;
++	ret = dma_set_mask_and_coherent(child, dma_get_mask(parent));
++	if (ret)
++		goto err_put;
++
++	ret = device_add(child);
++	if (ret)
++		goto err_put;
++
++	ret = of_reserved_mem_device_init_by_idx(child, parent->of_node, 0);
++	if (ret) {
++		device_del(child);
++		goto err_put;
++	}
++
++	return child;
++
++err_put:
++	put_device(child);
++	return ERR_PTR(ret);
++}
++
+ static int hevc_d_probe(struct platform_device *pdev)
+ {
+ 	struct hevc_d_dev *dev;
+@@ -240,13 +319,21 @@ static int hevc_d_probe(struct platform_device *pdev)
+ 		goto err_v4l2;
+ 	}
+ 
++	dev->mem_dev = hevc_d_memdev_create(dev->dev);
++	if (IS_ERR(dev->mem_dev)) {
++		dev_warn(dev->dev,
++			 "Failed to set up memory-region (%pe); using default CMA\n",
++			 dev->mem_dev);
++		dev->mem_dev = NULL;
++	}
++
+ 	dev->m2m_dev = v4l2_m2m_init(&hevc_d_m2m_ops);
+ 	if (IS_ERR(dev->m2m_dev)) {
+ 		v4l2_err(&dev->v4l2_dev,
+ 			 "Failed to initialize V4L2 M2M device\n");
+ 		ret = PTR_ERR(dev->m2m_dev);
+ 
+-		goto err_v4l2;
++		goto err_memdev;
+ 	}
+ 
+ 	dev->mdev.dev = &pdev->dev;
+@@ -292,6 +379,9 @@ static int hevc_d_probe(struct platform_device *pdev)
+ err_m2m:
+ 	media_device_cleanup(&dev->mdev);
+ 	v4l2_m2m_release(dev->m2m_dev);
++err_memdev:
++	if (dev->mem_dev)
++		device_unregister(dev->mem_dev);
+ err_v4l2:
+ 	mutex_destroy(&dev->dev_mutex);
+ 	v4l2_device_unregister(&dev->v4l2_dev);
+@@ -314,6 +404,9 @@ static void hevc_d_remove(struct platform_device *pdev)
+ 	mutex_destroy(&dev->dev_mutex);
+ 	v4l2_device_unregister(&dev->v4l2_dev);
+ 
++	if (dev->mem_dev)
++		device_unregister(dev->mem_dev);
++
+ 	hevc_d_hw_remove(dev);
+ }
+ 
+diff --git a/drivers/media/platform/raspberrypi/hevc_dec/hevc_d.h b/drivers/media/platform/raspberrypi/hevc_dec/hevc_d.h
+index 6d40d91..e624a83 100644
+--- a/drivers/media/platform/raspberrypi/hevc_dec/hevc_d.h
++++ b/drivers/media/platform/raspberrypi/hevc_dec/hevc_d.h
+@@ -88,6 +88,8 @@ struct hevc_d_hwbuf {
+ 	u8 *ptr;
+ 	dma_addr_t addr;
+ 	unsigned long attrs;
++	/* Device the buffer was allocated against (and must be freed via) */
++	struct device *alloc_dev;
+ };
+ 
+ struct hevc_d_dev;
+@@ -178,6 +180,15 @@ struct hevc_d_dev {
+ 	struct media_device	mdev;
+ 	struct platform_device	*pdev;
+ 	struct device		*dev;
++	/*
++	 * Optional child device bound to a dedicated reserved-memory region
++	 * (DT "memory-region"). If present, the decoder's internal working
++	 * buffers (PU, coeff, cmd FIFOs, colmv) are allocated from it in
++	 * preference to the default CMA pool. vb2 (frame/bitstream) buffers
++	 * always use dev, as they may need to be accessible to other devices
++	 * (e.g. the display) with tighter addressing limits.
++	 */
++	struct device		*mem_dev;
+ 	struct v4l2_m2m_dev	*m2m_dev;
+ 
+ 	/* Video device file (vfd) mutex */
+diff --git a/drivers/media/platform/raspberrypi/hevc_dec/hevc_d_h265.c b/drivers/media/platform/raspberrypi/hevc_dec/hevc_d_h265.c
+index 8be35a9..5325c49 100644
+--- a/drivers/media/platform/raspberrypi/hevc_dec/hevc_d_h265.c
++++ b/drivers/media/platform/raspberrypi/hevc_dec/hevc_d_h265.c
+@@ -38,27 +38,59 @@ enum hevc_slice_type {
+ 
+ enum hevc_layer { L0 = 0, L1 = 1 };
+ 
++/*
++ * Allocate hwbuf->size bytes for decoder-internal use.
++ *
++ * These buffers are only ever accessed by the decoder itself, so if a
++ * dedicated memory-region has been provided (dev->mem_dev) try that first,
++ * quietly, and only fall back to the default CMA pool (shared with vb2 frame
++ * buffers, the display, etc.) if that fails.
++ * Records the device used so the buffer can be freed against it.
++ */
++static void *hwbuf_dma_alloc(struct hevc_d_dev *const dev,
++			     struct hevc_d_hwbuf *const hwbuf)
++{
++	if (dev->mem_dev) {
++		hwbuf->alloc_dev = dev->mem_dev;
++		hwbuf->ptr = dma_alloc_attrs(dev->mem_dev, hwbuf->size,
++					     &hwbuf->addr,
++					     GFP_KERNEL | __GFP_NOWARN,
++					     hwbuf->attrs);
++		if (hwbuf->ptr)
++			return hwbuf->ptr;
++		hevc_d_dbg(1, &dev->v4l2_dev,
++			   "%s: %#zx not available from memory-region, using default pool\n",
++			   __func__, hwbuf->size);
++	}
++
++	hwbuf->alloc_dev = dev->dev;
++	hwbuf->ptr = dma_alloc_attrs(dev->dev, hwbuf->size, &hwbuf->addr,
++				     GFP_KERNEL, hwbuf->attrs);
++	if (!hwbuf->ptr)
++		hwbuf->alloc_dev = NULL;
++	return hwbuf->ptr;
++}
++
+ static int hwbuf_alloc(struct hevc_d_dev *const dev, struct hevc_d_hwbuf *hwbuf,
+ 		       size_t size, unsigned long attrs)
+ {
+ 	hwbuf->size = size;
+ 	hwbuf->attrs = attrs;
+ 	hwbuf->addr = 0;
+-	hwbuf->ptr = dma_alloc_attrs(dev->dev, hwbuf->size, &hwbuf->addr,
+-				     GFP_KERNEL, hwbuf->attrs);
+-	return !hwbuf->ptr ? -ENOMEM : 0;
++	return !hwbuf_dma_alloc(dev, hwbuf) ? -ENOMEM : 0;
+ }
+ 
+ static void hwbuf_free(struct hevc_d_dev *const dev,
+ 		      struct hevc_d_hwbuf *const hwbuf)
+ {
+ 	if (hwbuf->ptr)
+-		dma_free_attrs(dev->dev, hwbuf->size, hwbuf->ptr, hwbuf->addr,
+-			       hwbuf->attrs);
++		dma_free_attrs(hwbuf->alloc_dev, hwbuf->size, hwbuf->ptr,
++			       hwbuf->addr, hwbuf->attrs);
+ 	hwbuf->size = 0;
+ 	hwbuf->ptr = NULL;
+ 	hwbuf->addr = 0;
+ 	hwbuf->attrs = 0;
++	hwbuf->alloc_dev = NULL;
+ }
+ 
+ /* Realloc but do not copy
+@@ -77,20 +109,16 @@ static int hwbuf_realloc_new(struct hevc_d_dev * const dev,
+ 		return 0;
+ 
+ 	if (hwbuf->ptr)
+-		dma_free_attrs(dev->dev, hwbuf->size, hwbuf->ptr,
++		dma_free_attrs(hwbuf->alloc_dev, hwbuf->size, hwbuf->ptr,
+ 			       hwbuf->addr, hwbuf->attrs);
+ 
+ 	hwbuf->addr = 0;
+ 	hwbuf->size = size;
+-	hwbuf->ptr = dma_alloc_attrs(dev->dev, hwbuf->size,
+-				     &hwbuf->addr, GFP_KERNEL, hwbuf->attrs);
+ 
+-	if (!hwbuf->ptr) {
++	if (!hwbuf_dma_alloc(dev, hwbuf)) {
+ 		hwbuf->addr = 0;
+ 		hwbuf->size = old_size;
+-		hwbuf->ptr = dma_alloc_attrs(dev->dev, hwbuf->size,
+-					     &hwbuf->addr, GFP_KERNEL, hwbuf->attrs);
+-		if (!hwbuf->ptr) {
++		if (!hwbuf_dma_alloc(dev, hwbuf)) {
+ 			hwbuf->size = 0;
+ 			hwbuf->addr = 0;
+ 			hwbuf->attrs = 0;
+@@ -2366,7 +2394,7 @@ int hevc_d_h265_start(struct hevc_d_ctx *ctx)
+ 				DMA_ATTR_NO_KERNEL_MAPPING)) {
+ 			v4l2_err(&dev->v4l2_dev,
+ 				 "Failed to alloc %#zx Coeff%d buffer\n",
+-				 pu_size, i);
++				 coeff_size, i);
+ 			goto fail;
+ 		}
+ 	}
+-- 
+2.43.0
+

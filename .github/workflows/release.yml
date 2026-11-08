@@ -17,6 +17,11 @@ jobs:
         with:
           targets: aarch64-unknown-linux-musl
           components: clippy,rustfmt
+      - name: Install aarch64 cross C compiler
+        # Only needed so `ring` (the self-signed TLS certificate's crypto
+        # backend) can compile its per-target assembly; the final binary
+        # still links against musl exclusively, via rust-lld.
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - uses: actions/setup-node@v4
         with:
           node-version: '24'

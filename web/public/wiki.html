@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ungoggled – help</title>
+    <style>
+      :root {
+        --accent: #4fd1c5;
+        --bg: #0c0f14;
+        --panel: #11151d;
+        --panel-raised: #151a22;
+        --border: #1f2733;
+        --text: #e6ebf2;
+        --text-dim: #9aa3b2;
+        --text-faint: #6b7585;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, system-ui, sans-serif;
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .layout {
+        display: flex;
+        flex-wrap: wrap;
+        min-height: 100vh;
+      }
+      nav {
+        width: 240px;
+        flex: 0 0 240px;
+        border-right: 1px solid var(--border);
+        padding: 24px 16px;
+        box-sizing: border-box;
+        position: sticky;
+        top: 0;
+        align-self: flex-start;
+        max-height: 100vh;
+        overflow-y: auto;
+      }
+      nav .back {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-dim);
+        font-size: 13px;
+        margin-bottom: 18px;
+      }
+      nav .label {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--text-faint);
+        padding: 6px 10px;
+        display: block;
+      }
+      nav a.item {
+        display: block;
+        padding: 8px 10px;
+        border-radius: 8px;
+        font-size: 13.5px;
+        font-weight: 500;
+        color: var(--text-dim);
+      }
+      nav a.item:hover {
+        background: var(--panel-raised);
+        text-decoration: none;
+        color: var(--text);
+      }
+      nav a.item:target,
+      nav a.item.current {
+        background: var(--panel-raised);
+        color: var(--text);
+      }
+      main {
+        flex: 999 1 560px;
+        min-width: 0;
+        padding: 36px 48px 80px;
+        box-sizing: border-box;
+        max-width: 720px;
+      }
+      article {
+        margin-bottom: 56px;
+        scroll-margin-top: 24px;
+      }
+      h1 {
+        font-size: 24px;
+        margin: 0 0 6px;
+      }
+      .sub {
+        color: var(--text-faint);
+        font-size: 13.5px;
+        margin: 0 0 24px;
+      }
+      h3 {
+        font-size: 15px;
+        margin: 24px 0 8px;
+      }
+      p {
+        font-size: 14.5px;
+        line-height: 1.7;
+        color: #c3c9d4;
+      }
+      code {
+        font-family: ui-monospace, monospace;
+        background: var(--panel-raised);
+        padding: 1px 6px;
+        border-radius: 4px;
+      }
+      @media (max-width: 760px) {
+        nav {
+          position: static;
+          width: 100%;
+          flex: 1 1 100%;
+          max-height: none;
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+        }
+        main {
+          padding: 24px 20px 60px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <nav aria-label="Help topics">
+        <a class="back" href="/">&larr; Back to the interface</a>
+        <span class="label">Help</span>
+        <a class="item" href="#preview">Preview &amp; receiver</a>
+        <a class="item" href="#hdmi">HDMI &amp; idle screen</a>
+        <a class="item" href="#recording">Recording</a>
+        <a class="item" href="#stream">Spectator stream</a>
+        <a class="item" href="#usb">USB – ActionCam video player</a>
+        <a class="item" href="#wifi">Wi-Fi access point</a>
+        <a class="item" href="#hardware">Beeper, LEDs &amp; power button</a>
+        <a class="item" href="#system">System &amp; clock</a>
+        <a class="item" href="#graphs">Graphs (last 30 minutes)</a>
+        <a class="item" href="#terminal">Terminal</a>
+        <a class="item" href="#password">Control password</a>
+        <a class="item" href="#updates">Software updates</a>
+        <a class="item" href="#install">Installing as an app</a>
+      </nav>
+      <main>
+        <article id="preview">
+          <h1>Preview &amp; receiver</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            The big box on the main page is a small, low-frame-rate copy of
+            what's going out over HDMI, so you can check everything looks right
+            without a monitor plugged in. It is not the HDMI picture itself —
+            turning it off saves a little bandwidth but never touches the actual
+            output.
+          </p>
+          <h3>Start / Stop receiver</h3>
+          <p>
+            Stops listening to the goggles entirely. Mostly useful for
+            troubleshooting; normally just leave it running.
+          </p>
+          <h3>Reconnect goggles</h3>
+          <p>
+            Forces a fresh handshake with the goggles without restarting the
+            whole receiver — try this first if the picture gets stuck.
+          </p>
+        </article>
+
+        <article id="hdmi">
+          <h1>HDMI &amp; idle screen</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            Controls what the connected screen shows. "Output mode" picks the
+            resolution; Automatic is right for almost everyone. The Pi has two
+            micro-HDMI ports; either one works on its own. If you ever plug in
+            two screens at once, "Output port" picks which one gets the
+            picture.
+          </p>
+          <h3>Stretch to fill the screen</h3>
+          <p>
+            Normally a picture is shown in its own shape, so a 4:3 picture
+            (many action cameras, or the goggles in 4:3 mode) has black bars at
+            the sides of a 16:9 screen. Switch on "Stretch the live picture"
+            and/or "Stretch USB videos" to pull it over the whole screen
+            instead. Round things then look slightly oval. Both are off by
+            default. The speed is the same either way. The Pi's display chip
+            cannot stretch every picture size of the live feed; it then shows
+            that picture as it arrives, after a brief flicker when the picture
+            starts.
+          </p>
+          <h3>Idle screen</h3>
+          <p>
+            What the screen shows while there's no live picture — before the
+            goggles connect, or if the signal drops. Pick one from the list:
+            the built-in logo loops and "No signal" picture, a plain dark
+            screen, or your own photo, logo or short looping video (up to
+            1920×1080, H.264, 64 MiB).
+          </p>
+          <p>
+            The button next to each one says what tapping it does. "Play"
+            appears while the idle screen is what's on the TV: the TV switches
+            to it right away. "Use" appears while live video is showing: it
+            becomes the next idle screen without interrupting the picture.
+          </p>
+          <p>
+            The built-in ones are always there and can't be deleted. Room for
+            your own: 3 videos and 16 pictures — the built-ins don't count
+            towards that.
+          </p>
+        </article>
+
+        <article id="recording">
+          <h1>Recording</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            Saves the live goggles picture to the SD card, exactly as it arrives
+            — no quality loss. If the goggles' own on-screen display (battery,
+            channel, signal bars) is turned on, it's part of the picture; that's
+            set on the goggles or in DJI Fly, not here.
+          </p>
+          <h3>Auto-record every flight</h3>
+          <p>
+            Switch it on and forget it. Every time you fly, a recording starts
+            by itself and is saved the moment the signal ends — nothing to
+            press. Keeps the 5 most recent flights; the oldest is replaced
+            automatically.
+          </p>
+          <h3>Crash buffer (last 30 seconds)</h3>
+          <p>
+            Like the instant-replay on the DJI goggles themselves. This runs in
+            the background all the time once switched on, and the moment the
+            signal drops — say, in a crash — it automatically saves the last 30
+            seconds on its own. Keeps the 3 most recent clips. The "save last 30
+            seconds now" button below works independently, any time you want to
+            grab a moment without losing the signal first.
+          </p>
+          <h3>Start recording / Save last 30 seconds now</h3>
+          <p>
+            Manual alternatives for when you want full control: start and stop a
+            recording yourself, or grab whatever happened in roughly the last
+            half-minute right now.
+          </p>
+          <h3>Where do recordings go?</h3>
+          <p>
+            By default, the SD card — downloadable, deletable or playable
+            straight on the connected screen from this page. If the card gets
+            too full, recording stops on its own and you'll see a warning.
+            Switch on "Record to USB drive instead of SD card" and plug a USB
+            stick or drive into one of the regular USB-A ports to save
+            recordings there instead — handy for longer sessions, or to pull
+            footage straight off the drive afterwards. If the drive isn't
+            plugged in, recordings fall back to the SD card automatically.
+          </p>
+        </article>
+
+        <article id="stream">
+          <h1>Spectator stream</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            Lets people standing around watch the live feed on their own phone,
+            over the Pi's own Wi-Fi — no extra app, just a browser. This is
+            completely separate from the low-latency link you actually fly with;
+            turning it on or off never affects your flight.
+          </p>
+          <h3>Which quality should I pick?</h3>
+          <p>
+            <strong>High quality</strong> — best picture, but realistically only
+            for one or two people watching at once.<br /><br /><strong
+              >Low quality</strong
+            >
+            — a bit softer and smaller, but supports noticeably more viewers at
+            the same time. Only one of the two runs at a time; switching one on
+            turns the other off. The Pi's Wi-Fi radio is the real limit here,
+            and it's shared with everyone watching plus the web interface
+            itself.
+          </p>
+          <h3>How do spectators watch?</h3>
+          <p>
+            Two steps on their phone: first join the Pi's Wi-Fi, then open
+            <code>/watch.html</code> in any browser. Nothing to install. "Show
+            QR codes for spectators" puts both steps on your screen as two
+            codes to scan, one after the other — one joins the Wi-Fi (it has
+            the current network name and password in it), the other opens the
+            stream page. Their phone may say the Wi-Fi has no internet; that's
+            expected. The first time, their browser also warns that the
+            connection isn't private, because the Pi makes its own certificate:
+            tapping "Advanced", then "Proceed", gets past it.
+          </p>
+        </article>
+
+        <article id="usb">
+          <h1>USB – ActionCam video player</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            Plug an action camera or a USB stick with videos into one of the
+            Pi's regular USB-A ports (not the port the goggles use). Its video
+            files show up in a list here, and you can play one straight on the
+            connected screen — handy for watching footage together without a
+            laptop.
+          </p>
+          <h3>How smoothly is it playing?</h3>
+          <p>
+            While a clip plays, a line under the time bar shows how many
+            pictures per second really reach the screen and how fast the clip
+            runs compared with real time (1.00× is real time). Very large
+            action-camera clips can be more than the Pi can decode in real
+            time; they then play in smooth slow motion, and this line tells you
+            how slow. The same number appears in the HDMI output box and in the
+            "TV" line of the frame-rate graph.
+          </p>
+          <h3>Does it work with my camera?</h3>
+          <p>
+            Most common action cameras and formats work, but it hasn't been
+            tested against every model. If a video doesn't show up or doesn't
+            play cleanly, that's a known risk of this still-experimental
+            feature.
+          </p>
+        </article>
+
+        <article id="wifi">
+          <h1>Wi-Fi access point</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            The Pi broadcasts its own Wi-Fi network so you can reach this web
+            interface, and so spectators can join the stream — it doesn't need
+            your home or venue Wi-Fi at all. Change the name and password here;
+            changes apply right away, so reconnect your own device afterwards
+            too.
+          </p>
+          <h3>Joining an existing network instead</h3>
+          <p>
+            Further down, you can have the Pi join a Wi-Fi network you already
+            have — scan for one nearby or type its name, enter the password and
+            join. This switches off the Pi's own hotspot for as long as it's
+            connected there, so reconnect your own device to that same network
+            too; look for the Pi at <code>ungoggled.local</code>, or read its
+            current address straight off the HDMI screen. If the join doesn't
+            work out, the Pi gives up after about 30 seconds and goes back to
+            broadcasting its own hotspot on its own — no reboot needed. The
+            "always broadcast the access point after a reboot" switch decides
+            what happens the next time the Pi is turned on: left on, it always
+            comes back up as its own hotspot; switched off, it tries to rejoin
+            the network it was last connected to instead — useful for a Pi
+            that stays put as a stationary review station, rather than one
+            that gets taken flying.
+          </p>
+        </article>
+
+        <article id="hardware">
+          <h1>Beeper, LEDs &amp; power button</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            If you've wired up optional extras — a beeper, status LEDs or a
+            physical power button — this is where you tell the Pi which pins
+            they're connected to, or turn each one off if you don't have it.
+          </p>
+        </article>
+
+        <article id="system">
+          <h1>System &amp; clock</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            The Pi has no battery-backed clock, so it doesn't know the real time
+            after a power cut — opening this page sets it from your browser
+            automatically. From here you can also reboot or shut the Pi down
+            safely.
+          </p>
+          <h3 id="reboot-pending">"Restart the Pi once to finish the last update"</h3>
+          <p>
+            Some updates also improve how the Pi itself starts up — for
+            example keeping the video chip fast enough for large action-cam
+            clips. Those parts only switch on the next time the Pi starts.
+            Until then everything works exactly as before, so there's no rush:
+            restart it when it suits you (never mid-flight) with "Reboot Pi"
+            here, or it simply happens the next time you power the Pi up for
+            your next session. The message goes away once the Pi is back up.
+          </p>
+          <h3>Download diagnostics</h3>
+          <p>
+            Having a problem? This button gathers recent logs, the update
+            history and hardware info into one file you can download — even
+            on your phone — and send along when asking for help. Nothing is
+            uploaded anywhere on its own; it's just a download.
+          </p>
+        </article>
+
+        <article id="graphs">
+          <h1>Graphs (last 30 minutes)</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            Small graphs of the last half hour, grouped: Video (bitrate and
+            frame rate), Pi health (temperature, processor and memory),
+            Network (Wi-Fi and Ethernet traffic) and SD card. Touch or hover
+            any graph to read the values at that moment from all of them at
+            once; "Back to now" returns to the latest values. Shaded stretches
+            had no live picture.
+          </p>
+          <p>
+            Values past a warning level turn amber and are spelled out at the
+            top: the Pi at 75 °C or hotter, the processor or memory at 90 % or
+            more, and the Wi-Fi sending 40 Mbps or more (close to what the Pi's
+            radio can carry, which mostly matters with spectators watching).
+          </p>
+          <p>
+            Settings → Graphs switches whole groups on or off. That choice is
+            remembered on each phone or computer separately. The history lives
+            in the Pi's memory only, so it starts empty after a restart.
+          </p>
+        </article>
+
+        <article id="terminal">
+          <h1>Terminal</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            A command line on the Pi, right in the browser — for
+            troubleshooting together with someone who knows Linux, without
+            needing SSH. It runs as the Pi's administrator (root), so a wrong
+            command can break the installation: if you don't know what a
+            command does, don't run it.
+          </p>
+          <h3>Switching it on</h3>
+          <p>
+            It's off until you switch it on in Settings → Terminal. Switching
+            it off again closes an open terminal immediately.
+          </p>
+          <h3>Safety limits</h3>
+          <p>
+            Every time you open it, it asks for the control password again,
+            even though you're already logged in; wrong guesses count towards
+            the same lock-out as the login page. Only one terminal can be open
+            at a time. It closes on its own after 10 minutes without typing,
+            after 30 minutes at most, and when you log out; on most phones
+            also a minute after you switch away from it. Anything still
+            running in it is stopped when it closes.
+          </p>
+          <h3>On a phone</h3>
+          <p>
+            The row of keys under the terminal adds what a phone keyboard
+            lacks: Esc, Tab, Ctrl (tap it, then the letter), the arrow keys and
+            a few symbols; A− and A+ change the text size. The buttons above
+            them run a few harmless look-up commands, like the service log or
+            free disk space.
+          </p>
+        </article>
+
+        <article id="password">
+          <h1>Control password</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            Everything on this page — settings, recordings, Wi-Fi, updates,
+            rebooting the Pi — needs a password now, so anyone on the Wi-Fi
+            can't change things just by finding this address. The first time
+            anyone opens this page, it asks you to set one; after that,
+            logging in keeps you signed in on that browser.
+          </p>
+          <p>
+            The spectator stream page (<code>/watch.html</code>) is the one
+            exception on purpose — it never asks for this password, so you
+            can hand that link to anyone without handing them control too.
+          </p>
+          <p>
+            Forgot the password? There's no reset button in the interface —
+            ask whoever manages the Pi to delete <code>auth.json</code> from
+            its data directory (<code>/var/lib/dji-hdmi/</code> on the
+            standard image) over SSH and restart the service; the next visit
+            asks for a new password as if it were the first time.
+          </p>
+        </article>
+
+        <article id="updates">
+          <h1>Software updates</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            The line at the top of this section says whether your phone can
+            reach the update server right now: green means it can, amber means
+            it can't (often because the phone is on the Pi's Wi-Fi without
+            mobile data) — then upload an update file instead. It's checked
+            automatically when you open the System tab.
+          </p>
+          <p>
+            Check for a new version right from this page, and see what's new
+            before downloading anything. The download itself uses your phone's
+            own mobile data, not the Pi's connection — so it works even out in
+            the field. Once downloaded, install it right away or leave it ready
+            to install later; either way, if something goes wrong on first
+            start, it automatically switches back to the version that was
+            working before, so you're never left with a broken device.
+          </p>
+          <h3>An update rolled back and offers to skip the health check</h3>
+          <p>
+            After installing, the new version has to prove itself on the HDMI
+            screen before it's kept; if it doesn't, the previous version comes
+            back automatically — nothing stays broken. Occasionally that check
+            itself is wrong even though the new version actually looked fine,
+            which has happened before. When a rollback happens for exactly
+            that reason, a "Retry without the health check" button appears
+            right there, letting you install it again without that automatic
+            check. It's only offered for that specific situation — never for
+            a corrupt download or a real problem.
+          </p>
+          <h3>What's new so far</h3>
+          <ul>
+            <li>WebUI Rework — a cleaner, more modern look throughout</li>
+            <li>
+              Recording, with an automatic "save every flight" option and a
+              crash buffer like the goggles' own instant-replay
+            </li>
+            <li>
+              Spectator stream (experimental) — bystanders can watch the live
+              feed on their own phone
+            </li>
+            <li>
+              USB — ActionCam Video Player (experimental) — browse and play
+              videos from a USB drive or action camera on the screen
+            </li>
+            <li>
+              Wi-Fi: join an existing network instead of only broadcasting the
+              Pi's own, with an automatic fallback back to its own network if
+              the join doesn't work out
+            </li>
+            <li>Goggles 2 support (experimental)</li>
+            <li>Original DJI FPV Goggles (V1/V2) support (experimental)</li>
+            <li>
+              A loopable fallback video or image while waiting for the goggles'
+              signal
+            </li>
+            <li>
+              HTTPS, so the web interface can be installed as a real fullscreen
+              app on a phone
+            </li>
+            <li>
+              New logo, background and three selectable waiting-screen videos
+              for the HDMI output, plus an icon on every button
+            </li>
+            <li>This help wiki</li>
+            <li>
+              A password on the control interface, and a "retry without the
+              health check" option if an update ever rolls back for the
+              wrong reason
+            </li>
+            <li>
+              USB video player: shows how smoothly a clip plays, and big
+              action-camera clips (like the DJI Action 2 in 4K) no longer turn
+              the picture black
+            </li>
+            <li>
+              Switches to stretch the live picture and USB videos to fill the
+              whole screen (Settings → HDMI)
+            </li>
+            <li>
+              The picture comes back by itself after the monitor was switched
+              off and on again
+            </li>
+          </ul>
+        </article>
+
+        <article id="install">
+          <h1>Installing as an app</h1>
+          <p class="sub">What this does for you, in plain terms.</p>
+          <p>
+            In Chrome, tapping the menu and choosing "Install app" (or "Add to
+            Home Screen") puts a real app icon on your phone that opens full
+            screen, with its own entry in your phone's app list — not just a
+            bookmark.
+          </p>
+          <p>
+            Chrome only offers that for a page it trusts as fully secure. This
+            page uses a self-signed certificate (there's no public domain
+            name for the Pi's own Wi-Fi to get a normal one from), so most of
+            the time Chrome only offers "Create shortcut" instead — which
+            still opens full screen without the address bar, so it already
+            works fine for everyday use. If you'd rather have the real "app"
+            entry, trust the certificate once per phone:
+          </p>
+          <ol>
+            <li>
+              Download the certificate:
+              <a href="/api/tls-cert.crt">/api/tls-cert.crt</a>
+            </li>
+            <li>
+              Android: Settings → Security (or "Security &amp; privacy") →
+              Encryption &amp; credentials → Install a certificate → CA
+              certificate → pick the downloaded file
+            </li>
+            <li>Reopen this page — Chrome should now offer "Install app"</li>
+          </ol>
+          <p>
+            This is entirely optional. The certificate itself isn't secret —
+            it's exactly what your browser already receives every time it
+            connects here.
+          </p>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

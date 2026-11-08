@@ -1,11 +1,12 @@
 //! Record the live goggles feed to local storage (the SD card), independent
-//! of HDMI output and the USB-drive video browser. Three ways to capture,
+//! of HDMI output and the USB-drive video browser. Four ways to capture,
 //! all writing the same raw Annex-B H.264 the live decoder already
 //! receives, with no re-encoding, matching how fallback videos are stored:
 //! an explicit start/stop recording, an always-on ~30 s ring buffer saved
-//! on demand, and auto-recording a whole flight (buffered in RAM, under the
-//! runtime tmpfs, while the feed is live; written to the SD card, keeping
-//! the 5 most recent, as soon as the feed drops).
+//! on demand or automatically when the feed drops (like the goggles' own
+//! instant-replay), and auto-recording a whole flight (buffered in RAM,
+//! under the runtime tmpfs, while the feed is live; written to the SD card,
+//! keeping the 5 most recent, as soon as the feed drops).
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
@@ -26,6 +27,9 @@ const BUFFER_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// How many auto-recorded flights to keep on the SD card; the oldest is
 /// deleted once a new one is saved beyond this count.
 const MAX_FLIGHTS: usize = 5;
+/// How many crash-buffer clips to keep; a much smaller rotation than
+/// flights since these are just a safety net, not the whole recording.
+const MAX_CRASH_CLIPS: usize = 3;
 
 struct Active {
     file: File,
@@ -77,6 +81,9 @@ struct Inner {
     active: Option<Active>,
     buffer: Buffer,
     auto: Option<AutoRecording>,
+    /// Whether live input was flowing as of the last `crash_tick` call, to
+    /// detect the drop that should trigger an auto-save.
+    crash_was_live: bool,
 }
 
 #[derive(Clone)]
@@ -171,6 +178,23 @@ impl Controller {
                 finalize_flight(auto, sd_dir);
             }
             _ => {}
+        }
+    }
+    /// Keep the crash buffer in sync with live input, when the
+    /// `crash_buffer` setting is on. The ~30 s ring buffer itself always
+    /// runs regardless of this setting (it also backs the manual "save last
+    /// 30 seconds" button); this only decides whether a drop in live input
+    /// auto-saves it, like the goggles' own instant-replay, keeping the
+    /// most recent `MAX_CRASH_CLIPS`. Cheap to call every tick either way.
+    pub fn crash_tick(&self, dir: &Path, enabled: bool, input_live: bool) {
+        let snapshot = {
+            let mut inner = self.inner.lock().unwrap();
+            let just_dropped = enabled && inner.crash_was_live && !input_live;
+            inner.crash_was_live = input_live;
+            just_dropped.then(|| inner.buffer.snapshot()).flatten()
+        };
+        if let Some(bytes) = snapshot {
+            let _ = save_crash_clip(dir, &bytes);
         }
     }
     /// Check free space while a recording is active; stop it and return a
@@ -269,18 +293,35 @@ fn finalize_flight(auto: AutoRecording, sd_dir: &Path) {
     let _ = fs::remove_file(&auto.tmp_path);
 }
 fn prune_flights(dir: &Path) {
-    let mut flights: Vec<String> = fs::read_dir(dir)
+    prune_by_prefix(dir, "flight-", MAX_FLIGHTS);
+}
+
+/// Save a crash-buffer snapshot as its own file and prune older ones beyond
+/// `MAX_CRASH_CLIPS`.
+fn save_crash_clip(dir: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    fs::create_dir_all(dir)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let name = format!("crash-{stamp}.h264");
+    crate::settings::atomic_write(&dir.join(&name), bytes)?;
+    prune_by_prefix(dir, "crash-", MAX_CRASH_CLIPS);
+    Ok(())
+}
+
+/// Delete the oldest files in `dir` whose name starts with `prefix`, beyond
+/// the most recent `keep`. Nanosecond timestamps in the name sort
+/// chronologically as strings.
+fn prune_by_prefix(dir: &Path, prefix: &str, keep: usize) {
+    let mut names: Vec<String> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            name.starts_with("flight-").then_some(name)
+            name.starts_with(prefix).then_some(name)
         })
         .collect();
-    // Nanosecond timestamps in the name sort chronologically as strings.
-    flights.sort();
-    for old in flights.iter().rev().skip(MAX_FLIGHTS) {
+    names.sort();
+    for old in names.iter().rev().skip(keep) {
         let _ = fs::remove_file(dir.join(old));
     }
 }
@@ -296,7 +337,10 @@ fn free_bytes(path: &Path) -> Option<u64> {
 }
 
 pub fn valid_name(name: &str) -> bool {
-    (name.starts_with("recording-") || name.starts_with("clip-") || name.starts_with("flight-"))
+    (name.starts_with("recording-")
+        || name.starts_with("clip-")
+        || name.starts_with("flight-")
+        || name.starts_with("crash-"))
         && name.ends_with(".h264")
         && name.len() <= 64
         && name
@@ -334,6 +378,7 @@ mod tests {
         assert!(valid_name("recording-123.h264"));
         assert!(valid_name("clip-456.h264"));
         assert!(valid_name("flight-789.h264"));
+        assert!(valid_name("crash-321.h264"));
         assert!(!valid_name("../etc/passwd"));
         assert!(!valid_name("recording-123.mp4"));
         assert!(!valid_name("other-123.h264"));
@@ -414,6 +459,42 @@ mod tests {
         assert!(fs::read_dir(&tmp).unwrap().next().is_none());
         fs::remove_dir_all(&sd).unwrap();
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn crash_buffer_saves_on_drop_only_when_enabled() {
+        let (c, dir) = test_controller("crash");
+        // Disabled: a drop in live input saves nothing.
+        c.crash_tick(&dir, false, true);
+        c.feed(&[0, 0, 1, 0x67, 1, 2]);
+        c.crash_tick(&dir, false, false);
+        assert!(c.list(&dir).is_empty());
+        // Enabled: the drop auto-saves the current ring-buffer snapshot.
+        c.crash_tick(&dir, true, true);
+        c.feed(&[0, 0, 1, 0x65, 3, 4]);
+        c.crash_tick(&dir, true, false);
+        let listed = c.list(&dir);
+        assert_eq!(listed.len(), 1);
+        let name = listed[0]["name"].as_str().unwrap().to_owned();
+        assert!(name.starts_with("crash-"));
+        // Staying dropped must not save again.
+        c.crash_tick(&dir, true, false);
+        assert_eq!(c.list(&dir).len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn crash_buffer_prunes_to_the_most_recent_clips() {
+        let (c, dir) = test_controller("crash-prune");
+        fs::create_dir_all(&dir).unwrap();
+        for i in 0..(MAX_CRASH_CLIPS + 2) {
+            c.crash_tick(&dir, true, true);
+            c.feed(&[0, 0, 1, 0x67, i as u8]);
+            c.crash_tick(&dir, true, false);
+        }
+        let listed = c.list(&dir);
+        assert_eq!(listed.len(), MAX_CRASH_CLIPS);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

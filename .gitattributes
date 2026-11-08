@@ -1,0 +1,6 @@
+# Scripts run on Linux (the build VM, the Pi); CRLF breaks `set -euo
+# pipefail` and other bash parsing in subtle, hard-to-spot ways. Force LF
+# regardless of core.autocrlf on a Windows checkout.
+*.sh text eol=lf
+*.py text eol=lf
+*.rs text eol=lf

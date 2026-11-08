@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { IconCheck, IconClose } from "./icons";
 export function ConfirmDialog({
   open,
   title,
@@ -36,10 +37,10 @@ export function ConfirmDialog({
       <p>{body}</p>
       <div className="actions">
         <button disabled={busy} onClick={onCancel}>
-          Cancel
+          <IconClose /> Cancel
         </button>
         <button className="primary" disabled={busy} onClick={onConfirm}>
-          {busy ? "Working…" : confirmLabel}
+          <IconCheck /> {busy ? "Working…" : confirmLabel}
         </button>
       </div>
     </dialog>

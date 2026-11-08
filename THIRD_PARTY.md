@@ -54,3 +54,30 @@ checksum and build configuration are documented in FINDINGS.MD and the script.
 Retain the upstream license and source when redistributing a built plugin.
 
 Source: https://gstreamer.freedesktop.org/src/gst-omx/gst-omx-1.14.4.tar.xz
+
+## Patched Raspberry Pi HEVC decoder driver (GPL-2.0)
+
+The executable embeds a kernel module, `assets/kernel/6.18.50+rpt-rpi-v8/
+rpi-hevc-dec.ko`, and a device-tree overlay, `assets/kernel/
+ungoggled-hevc-cma.dtbo`, which it installs on the Pi. The module is the
+Raspberry Pi kernel's `rpi-hevc-dec` driver, GNU GPL version 2, built from
+`drivers/media/platform/raspberrypi/hevc_dec/` of
+https://github.com/raspberrypi/linux at commit
+`f2bc178ed43d8f737c10e2ca80598e2a812eab7b` (branch `rpi-6.18.y`), with our
+change `docs/upstream-patches/rpi-hevc-memory-region/0001-rpi-hevc-dec-memory-region.patch`
+applied, against the headers of the Raspberry Pi OS kernel package
+`linux-headers-6.18.50+rpt-rpi-v8` 1:6.18.50-1+rpt1. The complete
+corresponding source is that upstream directory plus the patch;
+`scripts/build-hevc-module.sh` fetches and verifies it and rebuilds the module
+bit for bit (hashes in `assets/kernel/6.18.50+rpt-rpi-v8/BUILD-INFO`). The
+overlay source is `assets/kernel/ungoggled-hevc-cma.dts` (GPL-2.0). Whoever
+redistributes the executable or an image must keep this source available
+with it.
+
+## Built-in waiting-screen videos
+
+`assets/default-loop.h264`, `assets/default-loop-3d.h264` and
+`assets/default-comic.h264`, with their poster images (`*.jpg`), were created
+by the project owner together with an AI assistant (Claude Opus). They are
+original to this project, contain no third-party footage, and are released
+under this project's MIT license.

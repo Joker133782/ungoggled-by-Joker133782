@@ -1,2 +1,10 @@
 [target.aarch64-unknown-linux-musl]
 linker = "rust-lld"
+
+[env]
+# ring (pulled in by rcgen/axum-server for the self-signed TLS certificate)
+# compiles small assembly routines per target via `cc`; musl has no system
+# compiler of its own here, so point it at the glibc cross-compiler instead.
+# Only its C/assembly *object files* are used, never glibc itself — the
+# final binary still links against musl exclusively through rust-lld.
+CC_aarch64_unknown_linux_musl = "aarch64-linux-gnu-gcc"

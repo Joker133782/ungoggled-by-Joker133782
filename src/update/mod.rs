@@ -212,28 +212,37 @@ fn ready(paths: &Paths, id: &str, m: &package::Manifest) -> Result<State> {
     }
     Ok(state)
 }
-pub fn launch(paths: &Paths, id: &str) -> Result<()> {
+pub fn launch(paths: &Paths, id: &str, skip_health_check: bool) -> Result<()> {
     ensure!(supported(), "Web updates require an installed Pi service");
     let mut state = paths.state()?;
     ensure!(
-        state.id.as_deref() == Some(id) && state.phase == Phase::Ready,
+        state.id.as_deref() == Some(id)
+            // RolledBack/Failed: retrying the same job (typically with
+            // `skip_health_check`, after a false-positive health check),
+            // not a fresh upload — see install::apply's matching guard.
+            && matches!(
+                state.phase,
+                Phase::Ready | Phase::RolledBack | Phase::Failed
+            ),
         "Upload and validate an update first"
     );
     state.phase = Phase::Queued;
     state.message = "Starting update".into();
     paths.save(&state)?;
     let exe = std::env::current_exe()?;
-    let output = Command::new("systemd-run")
-        .args([
-            "--quiet",
-            "--collect",
-            &format!("--unit=ungoggled-update-{id}"),
-            "--property=Type=exec",
-            "--property=TimeoutStopSec=90",
-        ])
-        .arg(exe)
-        .args(["update-worker", "--id", id])
-        .output();
+    let mut command = Command::new("systemd-run");
+    command.args([
+        "--quiet",
+        "--collect",
+        &format!("--unit=ungoggled-update-{id}"),
+        "--property=Type=exec",
+        "--property=TimeoutStopSec=90",
+    ]);
+    command.arg(exe).args(["update-worker", "--id", id]);
+    if skip_health_check {
+        command.arg("--skip-health-check");
+    }
+    let output = command.output();
     match output {
         Ok(out) if out.status.success() => Ok(()),
         other => {
@@ -270,7 +279,7 @@ pub fn request_rollback(paths: &Paths, release: &str) -> Result<String> {
         build_id: Some(target.name.clone()),
         ..State::default()
     })?;
-    launch(paths, &id)?;
+    launch(paths, &id, false)?;
     Ok(id)
 }
 pub fn releases_information(paths: &Paths) -> Value {

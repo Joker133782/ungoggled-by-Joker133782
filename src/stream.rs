@@ -66,7 +66,7 @@ impl Controller {
     pub fn feed(&self, nal: &[u8]) {
         let mut guard = self.0.lock().unwrap();
         if let Some(relay) = &mut *guard
-            && relay.stdin.write_all(nal).is_err()
+            && relay.stdin.write_all(&patch_sps_level(nal)).is_err()
         {
             *guard = None;
         }
@@ -77,6 +77,26 @@ impl Controller {
     }
     pub fn running(&self) -> bool {
         self.0.lock().unwrap().is_some()
+    }
+}
+
+/// Goggles declare H.264 level 5.2 even for plain 1920x1080p30 (see the same
+/// note on the live HDMI decode in `video.rs`). That path fixes it with
+/// GStreamer's `capssetter`, which only rewrites negotiation metadata
+/// between elements — fine when the next element is `v4l2h264dec`, but these
+/// bytes instead end up muxed verbatim into the MPEG-TS sent to a phone's own
+/// browser, which parses the real SPS and routinely refuses level 5.2
+/// outright. So rewrite the one byte for real. `level_idc` is byte-aligned
+/// right after the NAL header, before any Exp-Golomb-coded field, so no
+/// bitstream parsing is needed. Level 4.2 has ample headroom for 1080p30 and
+/// is broadly supported by phone decoders, unlike 5.1/5.2.
+fn patch_sps_level(nal: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if nal.len() > 6 && nal[3] & 31 == 7 {
+        let mut v = nal.to_vec();
+        v[6] = 42;
+        std::borrow::Cow::Owned(v)
+    } else {
+        std::borrow::Cow::Borrowed(nal)
     }
 }
 
@@ -105,6 +125,15 @@ fn spawn(quality: Quality) -> Result<Relay> {
                 "speed-preset=ultrafast",
                 "bitrate=1500",
                 "key-int-max=30",
+                "!",
+                // x264enc has no "profile" property on current GStreamer
+                // (it only appears as a caps field); without constraining
+                // it here, x264enc's default profile choice is not
+                // guaranteed and can land on something exotic (High 4:4:4
+                // Predictive was observed) that most decoders, including
+                // Firefox's, reject outright. A capsfilter on the field is
+                // the correct way to pin it; "main" is broadly supported.
+                "video/x-h264,profile=main",
                 "!",
                 "h264parse",
                 "!",
@@ -151,5 +180,28 @@ impl Drop for Relay {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sps_level_is_patched_down() {
+        // profile_idc=0x64 (High), constraint=0x00, level_idc=0x34 (5.2).
+        let sps = [0, 0, 1, 0x67, 0x64, 0, 0x34, 0xac];
+        let patched = patch_sps_level(&sps);
+        assert_eq!(patched[6], 42);
+        assert_eq!(&patched[..6], &sps[..6]);
+        assert_eq!(&patched[7..], &sps[7..]);
+    }
+
+    #[test]
+    fn non_sps_nals_are_untouched() {
+        let slice = [0, 0, 1, 0x65, 1, 2, 3];
+        assert_eq!(&*patch_sps_level(&slice), &slice);
+        let short = [0, 0, 1, 0x67, 1, 2];
+        assert_eq!(&*patch_sps_level(&short), &short);
     }
 }

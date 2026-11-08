@@ -4,6 +4,9 @@
 /research/upstream/
 /research/captures/
 *.h264
+!assets/default-loop.h264
+!assets/default-loop-3d.h264
+!assets/default-comic.h264
 *.pcap*
 
 

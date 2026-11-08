@@ -106,6 +106,11 @@ async fn receive_upload(
 #[serde(deny_unknown_fields)]
 struct Install {
     id: String,
+    /// An escape hatch for a health check that is itself broken — see
+    /// `install::switch`. Only meaningful as a retry of a job that already
+    /// failed its health check; defaults off for every ordinary install.
+    #[serde(default)]
+    skip_health_check: bool,
 }
 async fn install(
     State(app): State<App>,
@@ -121,11 +126,12 @@ async fn install(
         );
         let paths = Paths::default();
         let _lock = Lock::acquire(&paths)?;
+        let phase = paths.state()?.phase;
         anyhow::ensure!(
-            paths.state()?.phase == Phase::Ready,
+            matches!(phase, Phase::Ready | Phase::RolledBack | Phase::Failed),
             "No update ready to install"
         );
-        super::launch(&paths, &request.id)
+        super::launch(&paths, &request.id, request.skip_health_check)
     })
     .await
     .map_err(bad)?

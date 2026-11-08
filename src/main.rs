@@ -1,5 +1,6 @@
 mod api;
 mod assets;
+mod auth;
 mod clock;
 mod display;
 mod functionfs;
@@ -9,18 +10,24 @@ mod gadget;
 mod h264;
 mod hardware;
 mod history;
+mod metrics;
+mod playspeed;
 mod protocol;
 mod recording;
 mod session;
 mod settings;
 mod storage;
 mod stream;
+mod support;
+mod system_fixes;
+mod terminal;
+mod tls;
 mod update;
 mod v1v2;
 mod video;
 mod wifi;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     Json,
     extract::State,
@@ -55,6 +62,10 @@ enum Commands {
     Serve {
         #[arg(long, default_value = "0.0.0.0:80")]
         listen: String,
+        /// Serves the same interface over HTTPS too, with a self-signed
+        /// certificate generated on first use; set empty to disable.
+        #[arg(long, default_value = "0.0.0.0:443")]
+        tls_listen: String,
         #[arg(long, default_value = "web/dist")]
         web_dir: PathBuf,
         #[arg(long)]
@@ -85,9 +96,28 @@ enum Commands {
     UpdateWorker {
         #[arg(long)]
         id: String,
+        #[arg(long)]
+        skip_health_check: bool,
     },
     #[command(hide = true)]
     UpdateRecover,
+    /// Apply or inspect the boot configuration and HEVC decoder module fixes
+    /// (run as root by prepare-pi.sh before every service start).
+    SystemFixes {
+        #[arg(value_parser = ["apply", "status", "remove-module", "enable-module"])]
+        action: String,
+        #[arg(long, default_value = "/")]
+        root: PathBuf,
+        /// Kernel release to install for instead of the running one (image build).
+        #[arg(long)]
+        kernel_release: Option<String>,
+        /// Not a running system (image build): never loads modules.
+        #[arg(long)]
+        offline: bool,
+        /// Fail unless every fix is in place (image build).
+        #[arg(long)]
+        strict: bool,
+    },
     #[command(hide = true)]
     MigrateSettings {
         #[arg(long)]
@@ -170,7 +200,17 @@ struct App {
     /// Overrides the configured fallback image (e.g. with a "SD card full"
     /// notice) until the next successful recording start or dismissal.
     disk_warning: Arc<Mutex<Option<PathBuf>>>,
+    /// Shows the current Wi-Fi mode/SSID/IP on the HDMI output while the
+    /// client profile (see `wifi::join`) is the one active, so joining a
+    /// network doesn't leave no way to find the Pi again on it; `None` the
+    /// rest of the time. Kept current by a background task in `main`.
+    network_notice: Arc<Mutex<Option<PathBuf>>>,
     stream: stream::Controller,
+    /// Gates every control-plane route; `/watch.html` and `/api/stream.ts`
+    /// deliberately stay outside it so spectators never need a login.
+    auth: auth::Store,
+    /// Step-up tickets and the single open terminal (`terminal.rs`).
+    terminals: terminal::Terminals,
 }
 
 #[tokio::main]
@@ -193,8 +233,18 @@ async fn main() -> Result<()> {
             result.map(|_| ())
         }
         Commands::UpdateInstall { source } => update::manual(&source),
-        Commands::UpdateWorker { id } => update::install(&id),
+        Commands::UpdateWorker {
+            id,
+            skip_health_check,
+        } => update::install(&id, skip_health_check),
         Commands::UpdateRecover => update::recover(),
+        Commands::SystemFixes {
+            action,
+            root,
+            kernel_release,
+            offline,
+            strict,
+        } => system_fixes::command(&action, &root, kernel_release, offline, strict),
         Commands::MigrateSettings { data_dir, output } => {
             println!(
                 "{}",
@@ -221,6 +271,7 @@ async fn main() -> Result<()> {
         }
         Commands::Serve {
             listen,
+            tls_listen,
             web_dir,
             no_autostart,
             data_dir,
@@ -228,10 +279,19 @@ async fn main() -> Result<()> {
             mut worker,
         } => {
             std::fs::create_dir_all(&runtime_dir)?;
+            system_fixes::watch();
             worker.video_socket = runtime_dir.join("video.sock");
             let usb_mpv_socket = video::usb_mpv_socket(&worker.video_socket);
             let shutdown = Arc::new(AtomicBool::new(false));
-            let storage = storage::start(runtime_dir.clone(), shutdown.clone());
+            let settings = settings::Store::open(data_dir.clone())?;
+            let auth = auth::Store::open(&data_dir)?;
+            let usb_playback = Arc::new(Mutex::new(None));
+            let storage = storage::start(
+                runtime_dir.clone(),
+                settings.clone(),
+                shutdown.clone(),
+                usb_playback.clone(),
+            );
             let app = App {
                 status: Arc::new(Mutex::new(
                     json!({"phase":"stopped","video_bytes":0,"bitrate_mbps":0,"hdmi":"idle"}),
@@ -241,7 +301,7 @@ async fn main() -> Result<()> {
                 restart: Arc::new(AtomicU64::new(0)),
                 shutdown,
                 since: Instant::now(),
-                settings: settings::Store::open(data_dir)?,
+                settings,
                 history: Arc::new(Mutex::new(history::History::new())),
                 preview: Arc::new(Mutex::new(None)),
                 operations: Arc::new(Mutex::new(())),
@@ -250,11 +310,14 @@ async fn main() -> Result<()> {
                 beeper_test: Arc::new(AtomicBool::new(false)),
                 time_synced: Arc::new(AtomicBool::new(false)),
                 storage,
-                usb_playback: Arc::new(Mutex::new(None)),
+                usb_playback,
                 usb_mpv_socket,
                 recording: recording::Controller::new(runtime_dir.join("recording-thumbs")),
                 disk_warning: Arc::new(Mutex::new(None)),
+                network_notice: Arc::new(Mutex::new(None)),
                 stream: stream::Controller::default(),
+                auth,
+                terminals: terminal::Terminals::default(),
             };
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             let observed = app.clone();
@@ -262,15 +325,60 @@ async fn main() -> Result<()> {
             let renderer = video::start(
                 worker.clone(),
                 app.settings.clone(),
+                app.storage.clone(),
                 report.clone(),
                 app.preview.clone(),
                 app.shutdown.clone(),
                 app.usb_playback.clone(),
                 app.recording.clone(),
                 app.disk_warning.clone(),
+                app.network_notice.clone(),
                 app.stream.clone(),
             )?;
             let supervisor = supervise(app.clone(), worker);
+            let wifi_shutdown = app.shutdown.clone();
+            let wifi_watch_busy = app.wifi_busy.clone();
+            let wifi_watch_error = app.wifi_error.clone();
+            thread::spawn(move || wifi::watch(&wifi_shutdown, &wifi_watch_busy, &wifi_watch_error));
+            let notice = app.clone();
+            let wifi_notice_task = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(2));
+                let mut shown: Option<Vec<String>> = None;
+                while !notice.shutdown.load(Ordering::Relaxed) {
+                    interval.tick().await;
+                    let status = tokio::task::spawn_blocking(wifi::client_status)
+                        .await
+                        .ok()
+                        .filter(|s| s["active"].as_bool() == Some(true));
+                    let lines = status.as_ref().map(|s| {
+                        let ssid = s["ssid"].as_str().unwrap_or("?");
+                        let ip = s["ip"]
+                            .as_str()
+                            .map(|ip| ip.split('/').next().unwrap_or(ip).to_owned());
+                        vec![
+                            format!("Connected to: {ssid}"),
+                            match ip {
+                                Some(ip) => format!("IP: {ip}"),
+                                None => "Connecting…".to_owned(),
+                            },
+                        ]
+                    });
+                    if lines == shown {
+                        continue;
+                    }
+                    shown = lines.clone();
+                    *notice.network_notice.lock().unwrap() = match &lines {
+                        Some(lines) => assets::render_network_status(lines).and_then(|png| {
+                            // tmpfs, like the other runtime-generated images
+                            // (sd-card-full.png) — this is status, not content.
+                            let path = notice.usb_mpv_socket.with_file_name("network-status.png");
+                            std::fs::write(&path, png).ok()?;
+                            Some(path)
+                        }),
+                        None => None,
+                    };
+                }
+            });
             let hardware_status = app.clone();
             let hardware = hardware::start(
                 Arc::new(move || hardware_status.snapshot()),
@@ -283,32 +391,108 @@ async fn main() -> Result<()> {
             let sampler = tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(1));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut resources = metrics::Sampler::default();
                 while !samples.shutdown.load(Ordering::Relaxed) {
                     interval.tick().await;
                     let s = samples.snapshot();
-                    samples.history.lock().unwrap().push(&s);
+                    let m = resources.sample();
+                    samples.history.lock().unwrap().push(&s, &m);
                 }
             });
             let router = api::router(app.clone(), web_dir);
+            let tls_addr = if tls_listen.is_empty() {
+                None
+            } else {
+                Some(
+                    tls_listen
+                        .parse::<std::net::SocketAddr>()
+                        .with_context(|| format!("Invalid --tls-listen address {tls_listen}"))?,
+                )
+            };
+            // With TLS on, plain HTTP only redirects to it: a PWA install
+            // prompt (and anyone bookmarking the page) needs the secure
+            // origin, not whichever scheme happened to be typed first.
+            let http_router = match tls_addr {
+                Some(addr) => redirect_router(addr.port()),
+                None => router.clone(),
+            };
             eprintln!("ungoggled control interface: http://{listen}");
+            let tls_task = if let Some(tls_addr) = tls_addr {
+                let tls_config = tls::ensure(&app.settings.dir).await?;
+                eprintln!("ungoggled control interface: https://{tls_listen}");
+                let tls_router = router.clone();
+                let handle = axum_server::Handle::new();
+                tokio::spawn(wait_for_shutdown_signal(handle.clone()));
+                Some(tokio::spawn(async move {
+                    axum_server::bind_rustls(tls_addr, tls_config)
+                        .handle(handle)
+                        .serve(
+                            tls_router
+                                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                        )
+                        .await
+                }))
+            } else {
+                None
+            };
             let stop_app = app.clone();
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    let mut term =
-                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                            .unwrap();
-                    tokio::select! { _=tokio::signal::ctrl_c()=>{}, _=term.recv()=>{} }
-                    stop_app.shutdown.store(true, Ordering::Relaxed);
-                })
-                .await?;
+            axum::serve(
+                listener,
+                http_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                wait_for_shutdown().await;
+                stop_app.shutdown.store(true, Ordering::Relaxed);
+            })
+            .await?;
             app.shutdown.store(true, Ordering::Relaxed);
+            if let Some(t) = tls_task {
+                let _ = t.await;
+            }
             let _ = supervisor.join();
             let _ = renderer.join();
             let _ = hardware.join();
             sampler.abort();
+            wifi_notice_task.abort();
             Ok(())
         }
     }
+}
+async fn wait_for_shutdown() {
+    let mut term =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+    tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+}
+async fn wait_for_shutdown_signal(handle: axum_server::Handle) {
+    wait_for_shutdown().await;
+    handle.graceful_shutdown(Some(Duration::from_secs(2)));
+}
+/// Every plain-HTTP request becomes a redirect to the same host on
+/// `https_port`, so there is one canonical secure origin: Chrome's PWA
+/// install prompt (and anything else that cares about a secure context)
+/// only ever sees that one, regardless of which URL someone typed or
+/// bookmarked first.
+fn redirect_router(https_port: u16) -> axum::Router {
+    async fn redirect(
+        axum::extract::State(port): axum::extract::State<u16>,
+        headers: HeaderMap,
+        uri: axum::http::Uri,
+    ) -> axum::response::Redirect {
+        let host = headers
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .map(|h| h.split(':').next().unwrap_or(h))
+            .unwrap_or("localhost");
+        let suffix = if port == 443 {
+            String::new()
+        } else {
+            format!(":{port}")
+        };
+        axum::response::Redirect::permanent(&format!("https://{host}{suffix}{uri}"))
+    }
+    axum::Router::new()
+        .fallback(redirect)
+        .with_state(https_port)
 }
 impl App {
     fn event(&self, event: Value) {
@@ -345,6 +529,7 @@ impl App {
         );
         s["build_id"] = json!(update::running_build());
         s["disk_warning"] = json!(self.disk_warning.lock().unwrap().is_some());
+        s["reboot_required"] = json!(system_fixes::reboot_required());
         if let Some(clock) = clock::now() {
             s["time_unix_ms"] = json!(clock.unix_ms);
             s["time"] = json!(clock.display());
@@ -528,6 +713,33 @@ fn monitor_detected(connector: &std::path::Path) -> bool {
             .unwrap_or_default()
             .len()
             >= 128
+}
+
+/// HDMI-A connectors for the "Output port" setting: id to send, a friendly
+/// label matching the Pi 4's case silkscreen, and whether a display answers
+/// right now. Only listed when there's more than one, so single-HDMI
+/// hardware never shows a pointless one-choice dropdown.
+pub fn hdmi_connector_options() -> Vec<Value> {
+    let mut options: Vec<_> = hdmi_connectors()
+        .filter_map(|c| {
+            let name = c.file_name()?.to_string_lossy().into_owned();
+            let id: u32 = std::fs::read_to_string(c.join("connector_id"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()?;
+            // "card1-HDMI-A-1" -> port index 1; the Pi 4 port closest to the
+            // USB-C power input is always HDMI-A-1, labeled "HDMI0" on the case.
+            let port: u32 = name.rsplit('-').next()?.parse().ok()?;
+            Some(json!({
+                "id": id,
+                "name": format!("HDMI{}", port.saturating_sub(1)),
+                "connected": monitor_detected(&c),
+            }))
+        })
+        .collect();
+    options.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    options
 }
 
 fn doctor() -> Value {

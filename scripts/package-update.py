@@ -25,12 +25,17 @@ for name, source in {
     files[name] = (ROOT / source).read_bytes()
 # Lets an update offline-install mpv (for USB-drive video playback) on a Pi
 # that predates it, without needing internet on the Pi. See scripts/bundle-mpv.sh.
-for p in sorted((ROOT / 'build/mpv-debs').glob('*.deb')):
+bundled_packages = sorted((ROOT / 'build/mpv-debs').glob('*.deb'))
+for p in bundled_packages:
     files['packages/' + p.name] = p.read_bytes()
 files['RELEASE_NOTES.md'] = subprocess.check_output(['python3', 'scripts/version.py', '--notes'], cwd=ROOT)
+# An installer older than 0.3.7 doesn't know the `packages/*.deb` manifest
+# entry is allowed and rejects the whole file with a confusing "unexpected
+# update file" error instead of the clear "install an intermediate version
+# first" this field is meant to produce.
 manifest = {
     'format': 1, 'product': 'ungoggled', 'version': version,
-    'minimum_updater': '0.3.0', 'settings_schema': 1,
+    'minimum_updater': '0.3.7' if bundled_packages else '0.3.0', 'settings_schema': 1,
     'files': {name: {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()} for name, data in sorted(files.items())},
 }
 files['manifest.json'] = (json.dumps(manifest, indent=2) + '\n').encode()

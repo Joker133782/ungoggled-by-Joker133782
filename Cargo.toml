@@ -1,6 +1,6 @@
 [package]
 name = "ungoggled"
-version = "0.3.11"
+version = "0.3.49"
 edition = "2024"
 license = "MIT"
 
@@ -10,18 +10,22 @@ flate2 = "1"
 tar = "0.4"
 sha2 = "0.10"
 semver = "1"
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 clap = { version = "4", features = ["derive", "env"] }
 drm = "0.14"
 libc = "0.2"
 rppal = { version = "0.22", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+ab_glyph = "0.2"
 nusb = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "process", "signal", "time", "fs", "io-util", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
 
 [profile.release]
 lto = "thin"

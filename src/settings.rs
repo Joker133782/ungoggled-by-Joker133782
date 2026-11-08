@@ -11,6 +11,11 @@ use std::{
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub hdmi_mode: String,
+    /// DRM connector id to render to (as listed by `/api/hdmi-connectors`),
+    /// e.g. when two displays are plugged in at once and only one should
+    /// show the picture. `None` uses whichever HDMI-A port has a display
+    /// connected, trying each in a stable order.
+    pub hdmi_connector: Option<u32>,
     pub fallback_image: Option<String>,
     pub preview_enabled: bool,
     /// BCM GPIO pin driving a piezo beeper; defaults to GPIO6.
@@ -39,12 +44,38 @@ pub struct Settings {
     /// recent; no manual start/stop needed. The manual recording button
     /// still works independently of this.
     pub auto_record: bool,
+    /// Like the goggles' own instant-replay: the ~30 s ring buffer always
+    /// runs in the background regardless of this setting; this only decides
+    /// whether a feed drop (e.g. a crash) auto-saves it, keeping the most
+    /// recent 3 clips. The "save last 30 seconds" button still works
+    /// independently of this.
+    pub crash_buffer: bool,
+    /// Write recordings to the first detected USB mass-storage drive instead
+    /// of the SD card; falls back to the SD card whenever none is mounted.
+    pub record_to_usb: bool,
+    /// When a Wi-Fi client join (`wifi::join`) is active, keep it from
+    /// autoconnecting on a future boot — the Pi always comes back up
+    /// broadcasting its own access point until someone explicitly joins a
+    /// network again. Off lets it resume the last-joined network instead,
+    /// for a Pi that stays put as a stationary review station.
+    pub wifi_always_ap: bool,
+    /// Whether the browser terminal (a root shell, `terminal.rs`) can be
+    /// opened at all. Off by default; even when on, every opening needs the
+    /// password again. Turning it off closes an open terminal.
+    pub terminal_enabled: bool,
+    /// Stretch the live goggles picture over the whole screen instead of
+    /// keeping its shape (a 4:3 picture on a 16:9 screen otherwise gets black
+    /// bars at the sides). Off by default: the picture is shown as it arrives.
+    pub stretch_live: bool,
+    /// The same for a video played from a USB drive.
+    pub stretch_usb: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             hdmi_mode: "auto".into(),
-            fallback_image: Some("no-signal.png".into()),
+            hdmi_connector: None,
+            fallback_image: Some("default-loop.h264".into()),
             preview_enabled: true,
             beeper_pin: Some(crate::hardware::DEFAULT_BEEPER_PIN),
             power_button_pin: Some(crate::hardware::DEFAULT_POWER_BUTTON_PIN),
@@ -55,6 +86,12 @@ impl Default for Settings {
             stream_enabled: false,
             stream_quality: "high".into(),
             auto_record: false,
+            crash_buffer: false,
+            record_to_usb: false,
+            wifi_always_ap: true,
+            terminal_enabled: false,
+            stretch_live: false,
+            stretch_usb: false,
         }
     }
 }
@@ -65,13 +102,48 @@ pub struct Store {
 }
 impl Store {
     pub fn open(dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(dir.join("images"))?;
+        fs::create_dir_all(dir.join("images/thumbs"))?;
         let first_run = !dir.join("settings.json").exists();
-        if first_run {
+        // "No signal" is a permanent built-in like the videos below (see
+        // `assets::BUILTINS`); older versions let it be deleted, so put it
+        // back if it's missing rather than only on first run.
+        let no_signal = dir.join("images/no-signal.png");
+        if !no_signal.exists() {
+            atomic_write(&no_signal, include_bytes!("../assets/no-signal.png"))?;
+        }
+        // The three built-in waiting-screen videos are refreshed on every
+        // start (not just first run), so an in-place update replaces their
+        // content for an already-provisioned Pi, not only a fresh flash.
+        // They're treated as permanent menu entries, not user content. Their
+        // list thumbnails ship as pre-rendered posters: frames from the raw
+        // .h264 can't be grabbed with the mpv recipe used for other videos.
+        for (id, bytes, poster) in [
+            (
+                "default-loop.h264",
+                &include_bytes!("../assets/default-loop.h264")[..],
+                &include_bytes!("../assets/default-loop.jpg")[..],
+            ),
+            (
+                "default-loop-3d.h264",
+                &include_bytes!("../assets/default-loop-3d.h264")[..],
+                &include_bytes!("../assets/default-loop-3d.jpg")[..],
+            ),
+            (
+                "default-comic.h264",
+                &include_bytes!("../assets/default-comic.h264")[..],
+                &include_bytes!("../assets/default-comic.jpg")[..],
+            ),
+        ] {
+            atomic_write(&dir.join("images").join(id), bytes)?;
             atomic_write(
-                &dir.join("images/no-signal.png"),
-                include_bytes!("../assets/no-signal.png"),
+                &dir.join("images").join(id).with_extension("json"),
+                &serde_json::to_vec(&crate::assets::VideoInfo {
+                    width: 1920,
+                    height: 1080,
+                    fps: 30.0,
+                })?,
             )?;
+            atomic_write(&crate::assets::thumb_path(&dir.join("images"), id), poster)?;
         }
         let value = match fs::read(dir.join("settings.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
@@ -197,6 +269,15 @@ pub fn migrate(data_dir: &Path, output: &Path) -> Result<Vec<String>> {
                 .filter(|v| valid_mode(v))
                 .map(|v| next.hdmi_mode = v.into())
                 .is_some(),
+            "hdmi_connector" if value.is_null() => {
+                next.hdmi_connector = None;
+                true
+            }
+            "hdmi_connector" => value
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .map(|v| next.hdmi_connector = Some(v))
+                .is_some(),
             "preview_enabled" => value.as_bool().map(|v| next.preview_enabled = v).is_some(),
             "fallback_image" if value.is_null() => {
                 next.fallback_image = None;
@@ -245,6 +326,12 @@ pub fn migrate(data_dir: &Path, output: &Path) -> Result<Vec<String>> {
                 .map(|v| next.stream_quality = v.into())
                 .is_some(),
             "auto_record" => value.as_bool().map(|v| next.auto_record = v).is_some(),
+            "crash_buffer" => value.as_bool().map(|v| next.crash_buffer = v).is_some(),
+            "record_to_usb" => value.as_bool().map(|v| next.record_to_usb = v).is_some(),
+            "wifi_always_ap" => value.as_bool().map(|v| next.wifi_always_ap = v).is_some(),
+            "terminal_enabled" => value.as_bool().map(|v| next.terminal_enabled = v).is_some(),
+            "stretch_live" => value.as_bool().map(|v| next.stretch_live = v).is_some(),
+            "stretch_usb" => value.as_bool().map(|v| next.stretch_usb = v).is_some(),
             _ => false,
         };
         if !accepted {
@@ -392,6 +479,71 @@ mod tests {
             migrated.power_button_pin,
             Settings::default().power_button_pin
         );
+    }
+    /// Every field of the current schema has to survive a migration to the
+    /// same schema. `hdmi_connector` was once missing from `migrate`, so each
+    /// update (and each switch back) reset a chosen HDMI output to automatic.
+    /// The check below fails for any future field added without a `migrate` arm.
+    #[test]
+    fn migration_keeps_every_field_of_the_current_schema() {
+        let f = crate::update::tests::Fixture::new();
+        fs::create_dir(f.0.join("images")).unwrap();
+        fs::write(f.0.join("images/custom.png"), "image").unwrap();
+        let custom = Settings {
+            hdmi_mode: "1920x1080@60".into(),
+            hdmi_connector: Some(44),
+            fallback_image: Some("custom.png".into()),
+            preview_enabled: false,
+            beeper_pin: Some(5),
+            power_button_pin: Some(13),
+            goggles_led_pin: Some(20),
+            video_led_pin: Some(21),
+            hdmi_led_pin: Some(22),
+            beep_until_time_synced: true,
+            stream_enabled: true,
+            stream_quality: "event".into(),
+            auto_record: true,
+            crash_buffer: true,
+            record_to_usb: true,
+            wifi_always_ap: false,
+            terminal_enabled: true,
+            stretch_live: true,
+            stretch_usb: true,
+        };
+        let defaults = serde_json::to_value(Settings::default()).unwrap();
+        let wanted = serde_json::to_value(&custom).unwrap();
+        for (key, value) in wanted.as_object().unwrap() {
+            assert_ne!(
+                value, &defaults[key],
+                "{key} equals its default in this test, so a missing migrate arm would go unnoticed"
+            );
+        }
+        fs::write(
+            f.0.join("settings.json"),
+            serde_json::to_vec(&custom).unwrap(),
+        )
+        .unwrap();
+        let output = f.0.join("migrated.json");
+        assert!(migrate(&f.0, &output).unwrap().is_empty());
+        let migrated: Settings = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(migrated, custom);
+
+        fs::write(f.0.join("settings.json"), br#"{"hdmi_connector":null}"#).unwrap();
+        assert!(migrate(&f.0, &output).unwrap().is_empty());
+        let migrated: Settings = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(migrated.hdmi_connector, None);
+        fs::write(f.0.join("settings.json"), br#"{"hdmi_connector":"x"}"#).unwrap();
+        assert_eq!(migrate(&f.0, &output).unwrap().len(), 1);
+    }
+    #[test]
+    fn terminal_is_off_by_default_and_survives_migration() {
+        assert!(!Settings::default().terminal_enabled);
+        let f = crate::update::tests::Fixture::new();
+        fs::write(f.0.join("settings.json"), br#"{"terminal_enabled":true}"#).unwrap();
+        let output = f.0.join("migrated.json");
+        assert!(migrate(&f.0, &output).unwrap().is_empty());
+        let migrated: Settings = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert!(migrated.terminal_enabled);
     }
     #[test]
     fn migration_preserves_images_and_reports_incompatible_values() {

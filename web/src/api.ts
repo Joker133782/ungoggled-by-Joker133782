@@ -11,10 +11,16 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return response.json() as Promise<T>;
 }
-export function usePolling<T>(path: string, ms: number) {
+/**
+ * Fetches `path` now and every `ms` after that. With `enabled` false it
+ * stops polling (keeping the last value), so a tab that isn't on screen
+ * doesn't keep spending the Pi's Wi-Fi on data nobody is looking at.
+ */
+export function usePolling<T>(path: string, ms: number, enabled = true) {
   const [value, setValue] = useState<T | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
+    if (!enabled) return;
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -36,6 +42,6 @@ export function usePolling<T>(path: string, ms: number) {
       abort.abort();
       clearTimeout(timer);
     };
-  }, [path, ms]);
+  }, [path, ms, enabled]);
   return { value, error };
 }

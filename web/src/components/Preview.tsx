@@ -50,7 +50,7 @@ export function Preview({
       {enabled && src ? (
         <img src={src} alt="Live camera preview" />
       ) : state === "fallback" && fallback ? (
-        <img src={fallback} alt="Fallback image" />
+        <img src={fallback} alt="Idle screen" />
       ) : (
         <span>
           {enabled

@@ -55,8 +55,19 @@ autoconnect-priority=100
 [wifi]
 mode=ap
 ssid=ungoggled
-band=bg
-channel=6
+# Channel 36 (UNII-1, no DFS), decided by the user 2026-11-06. Known cost:
+# 5170-5190MHz sits inside the O4 Air Unit Pro's own 5.17-5.25GHz band (it
+# also uses 5.725-5.85GHz, auto-selected) — a co-channel overlap right next
+# to the goggles' receiver. 2.4GHz was rejected: most FPV builds fly RC
+# control (e.g. ELRS) on 2.4GHz, and losing control is a far worse failure
+# than losing the spectator-stream page.
+# Channel 100 (UNII-2e, DFS) was tried and does NOT start on the Pi 4's
+# onboard chip: `nmcli connection up` fails with "802.1X supplicant took too
+# long to authenticate", while the same profile on channel 36 activates
+# (A/B on real hardware, 2026-11-06 — see TODO.md/FINDINGS.MD). Don't pick a
+# DFS channel here again without testing it on a Pi first.
+band=a
+channel=36
 powersave=2
 
 [wifi-security]
@@ -83,6 +94,13 @@ mkdir -p /etc/cloud /etc/systemd/system.conf.d
 : > /etc/cloud/cloud-init.disabled
 systemctl mask userconfig.service
 systemctl enable NetworkManager.service ssh.service ungoggled-update-recovery.service dji-hdmi-firstboot.service dji-hdmi.service
+# A keyboard plugged into the Pi and Ctrl+Alt+F2 should always reach a login
+# prompt, independent of ungoggled's own DRM output on tty1/HDMI — VT
+# switching is handled by the kernel below any DRM client, so this doesn't
+# compete with or interrupt the live video. getty@tty2 ships disabled by
+# default on this image; nothing else needs to change for this to work. Not
+# yet confirmed with a real keyboard on real hardware — see TODO.md.
+systemctl enable getty@tty2.service
 printf '[Manager]\nRuntimeWatchdogSec=10s\n' > /etc/systemd/system.conf.d/dji-hdmi-watchdog.conf
 # Keep runtime logs off the SD card; configuration changes remain persistent.
 mkdir -p /etc/systemd/journald.conf.d

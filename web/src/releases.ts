@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { newestRelease, type Release } from "./release-version";
-const endpoint =
-  "https://api.github.com/repos/TimoLehnertz/ungoggled/releases?per_page=100";
+// Disabled on purpose: this must never check (or install from) the
+// original TimoLehnertz/ungoggled repository's releases — doing so would
+// silently overwrite every change made in this fork. The active, working
+// update check is Nextcloud-based; see nextcloud.ts. Leave this code path in
+// place but pointed at nothing until this fork publishes releases of its own
+// and the endpoint is set to those.
+const endpoint = "";
 const cacheKey = "ungoggled-github-releases-v1";
 const hour = 60 * 60 * 1000;
 let inFlight: Promise<unknown> | null = null;
 async function releases(force: boolean): Promise<unknown> {
+  if (!endpoint) return [];
   if (!force) {
     try {
       const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");

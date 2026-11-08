@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, headers } from "../api";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { PanelHead } from "./PanelHead";
+import { IconUpdate, IconReconnect } from "./icons";
 
 type Release = {
   name: string;
@@ -96,7 +98,11 @@ export function Versions({ disabled }: { disabled: boolean }) {
   const blocked = disabled || sending || !!job;
   return (
     <section className="panel versions">
-      <h2>Installed versions</h2>
+      <PanelHead
+        icon={<IconUpdate />}
+        title="Installed versions"
+        wiki="updates"
+      />
       <p className="help">
         The card keeps the active version, the one before it, one older update
         and the version from the SD-card image. Switching back uses the same
@@ -115,7 +121,7 @@ export function Versions({ disabled }: { disabled: boolean }) {
             </div>
             {!r.current && (
               <button disabled={blocked} onClick={() => setChoice(r)}>
-                Switch to this version
+                <IconReconnect /> Switch to this version
               </button>
             )}
           </li>

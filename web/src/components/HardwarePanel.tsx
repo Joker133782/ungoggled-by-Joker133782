@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useState } from "react";
 import type { Settings } from "../types";
 import { api, headers } from "../api";
+import { PanelHead } from "./PanelHead";
+import { IconChip, IconCheck, IconBell } from "./icons";
 
 type Draft = {
   beeperEnabled: boolean;
@@ -137,7 +139,11 @@ export function HardwarePanel({
   }
   return (
     <section className="panel hardware">
-      <h2>Beeper, LEDs &amp; power button</h2>
+      <PanelHead
+        icon={<IconChip />}
+        title="Beeper, LEDs & power button"
+        wiki="hardware"
+      />
       <p className="help">
         GPIO pins use BCM numbering. Defaults are piezo GPIO6, shutdown button
         GPIO19 (NuclearHazard V5 hat), goggles LED GPIO17, video LED GPIO23 and
@@ -193,7 +199,7 @@ export function HardwarePanel({
           disabled={disabled || saving || !dirty}
           onClick={() => void apply()}
         >
-          Apply
+          <IconCheck /> Apply
         </button>
         <button
           disabled={disabled || testing || dirty || settings.beeper_pin == null}
@@ -206,7 +212,7 @@ export function HardwarePanel({
           }
           onClick={() => void testBeeper()}
         >
-          {testing ? "Beeping…" : "Test buzzer"}
+          <IconBell /> {testing ? "Beeping…" : "Test buzzer"}
         </button>
       </div>
       {error && (

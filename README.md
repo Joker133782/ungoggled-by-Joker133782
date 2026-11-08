@@ -1,5 +1,9 @@
 # ungoggled
 
+*ungoggled by Joker133782* is a fork of
+[TimoLehnertz/ungoggled](https://github.com/TimoLehnertz/ungoggled), licensed
+under the MIT license (see `LICENSE`, Copyright (c) 2026 Timo Lehnertz).
+
 Turn a Raspberry Pi 4 into an HDMI receiver for **DJI Goggles 3** (and,
 experimentally, **DJI Goggles 2**), with a local web interface for setup and
 monitoring.
@@ -30,7 +34,7 @@ separately.
 - Three optional plain GPIO LEDs, one each for goggles, video and HDMI state.
 - An optional GPIO power button that shuts the Pi down when pressed.
 - Reboot and shut down the Pi from the web interface, with a confirmation step.
-- Experimental: browse and play back video files from a USB drive or action camera on the HDMI output. See **USB videos** below.
+- Experimental: browse and play back video files from a USB drive or action camera on the HDMI output. See **USB - ActionCam Video Player** below.
 
 ## Goggles 2 (experimental)
 
@@ -71,13 +75,13 @@ gadget port used for Goggles 2/3) with a data-capable cable, then set in
 UNGOGGLED_GOGGLES=v1v2
 ```
 
-## USB videos (experimental)
+## USB - ActionCam Video Player (experimental)
 
 Plug a USB drive or an action camera acting as USB mass storage into one of
 the Pi's regular USB-A ports (never the USB-C gadget port the goggles use).
 It is mounted read-only automatically; video files found on it (`.mp4`,
 `.mov`, `.mkv`, `.avi`, `.m4v`, `.insv`, `.lrv`) are listed in the web
-interface under **USB videos**, each with a cached thumbnail (a single
+interface under **USB - ActionCam Video Player**, each with a cached thumbnail (a single
 extracted frame; the cache lives under the runtime directory, which is
 tmpfs, so it is gone again after any reboot or power loss, not left on the
 SD card). Playing one takes over the HDMI output from live goggles video and
@@ -95,13 +99,15 @@ one-time, best-effort step that never affects the rest of the update (see
 `scripts/bundle-mpv.sh`). If it still could not install for some reason, the
 web interface reports that mpv is missing instead of failing silently.
 Playback otherwise uses whatever codec and resolution the file needs and
-whatever the Pi's mpv/ffmpeg install can decode for it, so very high
-resolutions or HEVC clips may not play smoothly without working hardware
-decode. Not hardware-verified.
+whatever the Pi's mpv/ffmpeg install can decode for it. HEVC hardware decode
+(e.g. DJI Osmo Nano footage) is hardware-verified with this image's 640MiB
+CMA pool; without that headroom GStreamer's own worst-case buffer
+pre-allocation can starve the decoder before it even starts (see
+FINDINGS.MD).
 
 ## Recording (experimental)
 
-Three independent ways to capture the live goggles feed to the SD card
+Four independent ways to capture the live goggles feed to the SD card
 exactly as received (no re-encoding), all listed together under
 **Recording** in the web interface, with download, deletion, and playback
 on the HDMI output, each with a thumbnail:
@@ -111,11 +117,17 @@ on the HDMI output, each with a thumbnail:
   the feed lasts, and saved to the SD card the moment the feed drops — no
   start/stop needed. Keeps the 5 most recent flights; the oldest is deleted
   automatically once a new one is saved.
+- **Crash buffer (last 30 seconds)**: a toggle, like the goggles' own
+  instant-replay. The ~30 s ring buffer always runs in the background at low
+  memory cost regardless of this setting; turning it on makes a feed drop
+  (e.g. a crash) auto-save it, with no button to press. Keeps the 3 most
+  recent clips, a separate rotation from the 5 kept flights.
 - **Start recording** / **Stop recording**: manual, writes straight to the
-  SD card as it records, independent of the auto-record toggle above (both
-  can run at once).
-- **Save last 30 seconds**: always running in the background at low memory
-  cost; captures a moment you did not plan to record, on demand.
+  SD card as it records, independent of the toggles above (all can run at
+  once).
+- **Save last 30 seconds now**: grabs the current ~30 s ring buffer on
+  demand, independent of the crash-buffer toggle, for a moment you did not
+  plan to record and the feed never dropped for.
 
 Manual and auto-recording both stop themselves, and auto-recording's save
 is skipped, with less than 2 GB of free space left on the SD card; the
@@ -240,6 +252,17 @@ using those credentials. HDMI reception continues during the network change.
 The web interface is intended for your private local network and has no separate
 login; do not expose port 80 to the Internet.
 
+**HTTPS:** the same interface is also served on port 443 over HTTPS, with a
+self-signed certificate generated once on first use and kept in the data
+directory from then on. A real, publicly trusted certificate isn't possible
+here — that needs a publicly resolvable domain name, which a private access
+point at a fixed local IP doesn't have — so the first visit from a new
+browser shows a "connection isn't private" warning; proceed past it once
+("Advanced" → "Proceed"). Without this, browsers refuse to treat the page as
+installable and "Add to Home Screen" falls back to a plain bookmark with the
+address bar still showing; over HTTPS, once the warning is accepted, it
+installs as a real fullscreen app. Set `--tls-listen ""` to disable it.
+
 **Beeper, LEDs & power button:** all optional. Goggles, video and HDMI each get a
 distinct happy tone when they connect and a distinct sad tone when they disconnect,
 plus one chime at startup. Defaults are piezo **GPIO6**, shutdown button **GPIO19**
@@ -258,12 +281,17 @@ confirmation first.
 
 ## Update without reflashing
 
-From version **0.3.0**, open **Software update** in the web interface:
+From version **0.3.0**, open **Software update** in the web interface. Either:
 
-1. Download `ungoggled-VERSION.update.tar.gz` from [GitHub releases](https://github.com/TimoLehnertz/ungoggled/releases).
-2. Click **Upload update** and choose the file. The Pi checks its contents and checksums.
-3. Review the version and click **Install**. Keep the Pi powered while it updates.
-4. The interface reconnects and reloads when installation finishes.
+- Click **Check for updates**, and if a newer version is found, **Download**
+  it (over the viewing phone's own connection, not the Pi's — the Pi itself
+  never needs internet access for this) and then **Install now** or
+  **Install later**; or
+- Click **Upload update** and choose an `ungoggled-VERSION.update.tar.gz`
+  file you already have. The Pi checks its contents and checksums either way.
+
+Keep the Pi powered while it updates; the interface reconnects and reloads
+when installation finishes.
 
 Only **Raspberry Pi 4 with 64-bit Raspberry Pi OS (ARM64)** is supported.
 The update contains the entire application: you can skip intermediate application versions. Only install update
@@ -361,8 +389,14 @@ To build the ARM64 update on Linux:
 
 ```sh
 rustup target add aarch64-unknown-linux-musl
+sudo apt-get install -y gcc-aarch64-linux-gnu
 scripts/build-update.sh
 ```
+
+The cross C compiler is only there so `ring` (the self-signed TLS
+certificate's crypto backend) can compile its per-target assembly; the
+final binary still links against musl exclusively, via `rust-lld`
+(`.cargo/config.toml` points `ring`'s build at it already).
 
 Build the SD image with `scripts/build-image.sh`. It uses the checksum-pinned
 official base image and installs packages inside an isolated ARM64 filesystem.
