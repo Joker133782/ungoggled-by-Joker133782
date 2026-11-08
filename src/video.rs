@@ -68,8 +68,67 @@ struct Chunk {
 /// over mpv's JSON IPC socket, so the web interface can offer a scrub bar.
 struct UsbPlayer {
     child: Child,
+    started: Instant,
+    /// When mpv's idle state was last asked, and how many asks in a row it
+    /// said "idle" (see `went_idle`).
+    idle_checked: Instant,
+    idle_hits: u32,
+}
+/// How long after the start mpv may still look idle (nothing loaded yet)
+/// without that meaning the clip is over.
+const USB_IDLE_GRACE: Duration = Duration::from_secs(3);
+/// Why a USB clip's playback has to be wound up by the render loop.
+#[derive(Debug, PartialEq, Eq)]
+enum UsbEnd {
+    /// mpv exited, reached the end of the clip, or fell idle on its own (it
+    /// does that when it can no longer read the file).
+    Finished,
+    /// The file itself is gone: the drive or camera was unplugged.
+    FileGone,
+}
+/// Whether the playing USB clip is over, for any reason, so the render loop
+/// can do what the web interface's Stop button does. `clip` is the requested
+/// file (set even while the player is still starting), `player` mpv.
+fn usb_end(player: Option<&mut UsbPlayer>, clip: Option<&Path>, socket: &Path) -> Option<UsbEnd> {
+    // First, and independent of mpv: a camera pulled out mid-clip leaves mpv
+    // either idle or stuck on I/O errors, and the screen back on the Linux
+    // console, while the file (and with it the drive's mount) has vanished.
+    if clip.is_some_and(|p| !p.exists()) {
+        return Some(UsbEnd::FileGone);
+    }
+    let player = player?;
+    (player.finished() || player.eof(socket) || player.went_idle(socket))
+        .then_some(UsbEnd::Finished)
 }
 impl UsbPlayer {
+    fn new(child: Child) -> Self {
+        Self {
+            child,
+            started: Instant::now(),
+            idle_checked: Instant::now(),
+            idle_hits: 0,
+        }
+    }
+    /// True once mpv has nothing loaded any more although it is still running
+    /// (`--idle=yes`): the file ended, or could not be read any longer. Asked
+    /// at most twice a second and only after a grace period, and it has to say
+    /// so twice in a row, so mpv's start-up and a switch between two clips
+    /// never count. Shows as a Linux console on the screen, because mpv lets
+    /// go of the display when it goes idle.
+    fn went_idle(&mut self, socket: &Path) -> bool {
+        if self.started.elapsed() < USB_IDLE_GRACE {
+            return false;
+        }
+        if self.idle_checked.elapsed() >= Duration::from_millis(500) {
+            self.idle_checked = Instant::now();
+            let idle = mpv_command(socket, json!(["get_property", "idle-active"]))
+                .ok()
+                .and_then(|r| r.get("data").and_then(Value::as_bool))
+                .unwrap_or(false);
+            self.idle_hits = if idle { self.idle_hits + 1 } else { 0 };
+        }
+        self.idle_hits >= 2
+    }
     /// True once mpv has exited. With `--idle=yes` that only happens on a
     /// real error or an explicit `quit` command, never just from reaching
     /// the end of the file, so a finished clip still answers IPC queries.
@@ -97,7 +156,13 @@ impl Drop for UsbPlayer {
         // tried on 2026-11-02 against a "CMA leak" that turned out to be page
         // cache; see FINDINGS.MD.)
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Bounded: a process stuck in I/O on a drive that was just pulled out
+        // cannot be reaped until the kernel gives up on that I/O, and the
+        // render loop that drops this must not freeze meanwhile.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while matches!(self.child.try_wait(), Ok(None)) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 /// Fixed path for mpv's control socket while a USB video plays. Fixed rather
@@ -277,7 +342,7 @@ fn spawn_usb_player(
                  the SD card with an image that includes it."
             )
         })?;
-    Ok(UsbPlayer { child })
+    Ok(UsbPlayer::new(child))
 }
 struct Player {
     child: Child,
@@ -650,11 +715,19 @@ pub fn start(
                 }
                 current_usb = requested_usb;
             }
-            if usb_player.as_mut().is_some_and(UsbPlayer::finished)
-                || usb_player
-                    .as_ref()
-                    .is_some_and(|p| p.eof(&usb_mpv_socket(&args.video_socket)))
-            {
+            // The same as pressing Stop in the web interface, for whatever
+            // ends the clip by itself: its end, mpv dying or going idle, or
+            // the camera being unplugged. Without this the render loop kept
+            // standing aside for a player that no longer owned the screen,
+            // which stayed on the Linux console (field report, 2026-11-08).
+            if let Some(end) = usb_end(
+                usb_player.as_mut(),
+                current_usb.as_deref(),
+                &usb_mpv_socket(&args.video_socket),
+            ) {
+                if end == UsbEnd::FileGone {
+                    report(json!({"message":"USB drive removed: video playback stopped"}));
+                }
                 usb_player = None;
                 current_usb = None;
                 *usb_playback.lock().unwrap() = None;
@@ -1170,6 +1243,116 @@ pub(crate) fn input_caps(line: &str) -> Option<(u32, u32, Option<f64>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixListener;
+
+    /// A stand-in for mpv's control socket that answers every request with
+    /// the given `data` value, until the returned flag is set.
+    fn fake_mpv_ipc(
+        socket: &Path,
+        data: Value,
+    ) -> (Arc<std::sync::atomic::AtomicBool>, thread::JoinHandle<()>) {
+        let _ = std::fs::remove_file(socket);
+        let listener = UnixListener::bind(socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stop.clone();
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    stream.set_nonblocking(false).unwrap();
+                    let mut line = String::new();
+                    let _ = BufReader::new(stream.try_clone().unwrap()).read_line(&mut line);
+                    let _ = writeln!(stream, "{}", json!({"data": data, "error": "success"}));
+                } else {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        });
+        (stop, handle)
+    }
+    fn sleeper() -> Child {
+        Command::new("sleep").arg("30").spawn().unwrap()
+    }
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ungoggled-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_pulled_out_camera_ends_the_clip_even_without_a_player() {
+        let dir = test_dir("usb-gone");
+        let clip = dir.join("clip.mp4");
+        let socket = dir.join("none.sock");
+        std::fs::write(&clip, b"x").unwrap();
+        // The file is there: nothing to do while the player is still starting.
+        assert_eq!(usb_end(None, Some(&clip), &socket), None);
+        // The drive goes away: stopped, whatever mpv is doing.
+        std::fs::remove_file(&clip).unwrap();
+        assert_eq!(usb_end(None, Some(&clip), &socket), Some(UsbEnd::FileGone));
+        // No clip requested at all: nothing to end.
+        assert_eq!(usb_end(None, None, &socket), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_player_that_exited_ends_the_clip() {
+        let dir = test_dir("usb-exited");
+        let clip = dir.join("clip.mp4");
+        std::fs::write(&clip, b"x").unwrap();
+        let mut player = UsbPlayer::new(Command::new("true").spawn().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while usb_end(Some(&mut player), Some(&clip), &dir.join("none.sock")).is_none() {
+            assert!(Instant::now() < deadline, "exit never noticed");
+            thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn mpv_going_idle_ends_the_clip_but_not_during_start_up() {
+        let dir = test_dir("usb-idle");
+        let socket = dir.join("mpv.sock");
+        let (stop, server) = fake_mpv_ipc(&socket, json!(true));
+        let mut player = UsbPlayer::new(sleeper());
+        // Just started: idle-looking mpv is still loading, however often asked.
+        player.idle_checked = Instant::now() - Duration::from_secs(1);
+        assert!(!player.went_idle(&socket));
+        assert_eq!(player.idle_hits, 0);
+        // After the grace period it has to be seen idle twice in a row.
+        player.started = Instant::now() - USB_IDLE_GRACE - Duration::from_secs(1);
+        player.idle_checked = Instant::now() - Duration::from_secs(1);
+        assert!(!player.went_idle(&socket), "one sighting is not enough");
+        assert!(!player.went_idle(&socket), "asked too soon again");
+        player.idle_checked = Instant::now() - Duration::from_secs(1);
+        assert!(player.went_idle(&socket));
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+
+        // A playing mpv resets the count.
+        let (stop, server) = fake_mpv_ipc(&socket, json!(false));
+        player.idle_checked = Instant::now() - Duration::from_secs(1);
+        assert!(!player.went_idle(&socket));
+        assert_eq!(player.idle_hits, 0);
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dropping_a_player_does_not_wait_forever_and_kills_the_process() {
+        let child = sleeper();
+        let pid = child.id();
+        let player = UsbPlayer::new(child);
+        let start = Instant::now();
+        drop(player);
+        assert!(start.elapsed() < Duration::from_secs(2), "slow hand-over");
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "mpv stand-in still running (or not reaped)"
+        );
+    }
+
     #[test]
     fn stretch_usb_never_rebuilds_but_stretch_live_does() {
         let current = crate::settings::Settings::default();

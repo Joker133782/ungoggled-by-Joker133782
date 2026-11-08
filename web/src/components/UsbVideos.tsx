@@ -188,6 +188,9 @@ export function UsbVideos({
     }
   }
 
+  // Nothing to list once the drive is gone, even before the list itself has
+  // been fetched again (an unplugged camera's clips must not linger).
+  const shown = status && status.drives.length === 0 ? [] : videos;
   const playing = status?.playing ?? false;
   const duration = status?.duration ?? 0;
   const position = scrub ?? status?.position ?? 0;
@@ -280,12 +283,12 @@ export function UsbVideos({
           {error}
         </p>
       )}
-      {videos && videos.length === 0 && (
+      {shown && shown.length === 0 && (
         <p className="help">No USB drive with video files found.</p>
       )}
-      {videos && videos.length > 0 && (
+      {shown && shown.length > 0 && (
         <ul className="usb-video-list">
-          {videos.map((v) => (
+          {shown.map((v) => (
             <li key={v.id}>
               <Thumbnail video={v} scanning={!!status?.scan} />
               <div style={{ flex: 1, minWidth: 0 }}>

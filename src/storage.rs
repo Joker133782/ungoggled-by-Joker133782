@@ -168,8 +168,15 @@ impl Store {
         });
     }
     /// Resolve an id from the most recent `list_videos` call back to a path.
+    /// A file that has vanished since (its drive was unplugged) does not
+    /// resolve: nothing may be played from a list the drive is no longer part of.
     pub fn resolve(&self, id: &str) -> Option<PathBuf> {
-        self.videos.lock().unwrap().get(id).cloned()
+        self.videos
+            .lock()
+            .unwrap()
+            .get(id)
+            .filter(|p| p.exists())
+            .cloned()
     }
     /// The cached thumbnail for an id, if one has been generated.
     pub fn thumbnail(&self, id: &str) -> Option<PathBuf> {
@@ -280,7 +287,7 @@ pub fn start(
             thread::sleep(Duration::from_secs(2));
         }
         for drive in watched.lock().unwrap().drain(..) {
-            unmount(&drive);
+            unmount(&drive, false);
         }
     });
     store
@@ -295,12 +302,12 @@ fn reconcile(base: &Path, mounted: &Arc<Mutex<Vec<Mounted>>>, read_write: bool) 
     let mut guard = mounted.lock().unwrap();
     guard.retain(|m| {
         if !present.contains(&m.device) {
-            unmount(m);
+            unmount(m, true);
             false
         } else if m.read_write != read_write {
             // record_to_usb changed since this drive was mounted: drop it so
             // the loop below mounts it fresh in the now-desired mode.
-            unmount(m);
+            unmount(m, false);
             false
         } else {
             true
@@ -365,8 +372,22 @@ fn existing_mountpoint(device: &str) -> Option<PathBuf> {
             parts.next().map(PathBuf::from)
         })
 }
-fn unmount(m: &Mounted) {
-    let _ = Command::new("umount").arg(&m.mountpoint).output();
+/// `device_gone`: the drive is no longer plugged in.
+fn unmount(m: &Mounted, device_gone: bool) {
+    let plain = Command::new("umount")
+        .arg(&m.mountpoint)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !plain && device_gone {
+        // Busy: the drive was pulled out while a clip was playing from it,
+        // and mpv still holds the file open. A plain umount then fails for
+        // good and would leave a dead mount behind (until the next reboot),
+        // so detach it lazily: it goes away from the path at once, and the
+        // kernel frees it when the last open file is closed. Only for a
+        // drive that is really gone: one that is still there (remounted for
+        // another mode) must stay reachable for what is playing from it.
+        let _ = Command::new("umount").arg("-l").arg(&m.mountpoint).output();
+    }
     let _ = fs::remove_dir(&m.mountpoint);
 }
 
@@ -537,6 +558,31 @@ mod tests {
         assert!(!found.iter().any(|p| p.ends_with("notes.txt")));
         assert!(!found.contains(&too_deep), "exceeds max depth");
 
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_video_whose_drive_was_unplugged_no_longer_resolves() {
+        let dir = std::env::temp_dir().join(format!("ungoggled-resolve-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("clip.mp4");
+        fs::write(&clip, b"x").unwrap();
+        let store = Store {
+            mounted: Arc::new(Mutex::new(Vec::new())),
+            videos: Arc::new(Mutex::new(HashMap::new())),
+            scan: Arc::new(Mutex::new(None)),
+            thumbnailing: Arc::new(Mutex::new(false)),
+            thumb_dir: dir.clone(),
+            usb_playback: Arc::new(Mutex::new(None)),
+        };
+        store
+            .videos
+            .lock()
+            .unwrap()
+            .insert("0123456789abcdef".into(), clip.clone());
+        assert_eq!(store.resolve("0123456789abcdef"), Some(clip.clone()));
+        fs::remove_file(&clip).unwrap();
+        assert_eq!(store.resolve("0123456789abcdef"), None);
         fs::remove_dir_all(&dir).unwrap();
     }
 

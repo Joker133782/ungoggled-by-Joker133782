@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.50
+
+- **Fixed: pulling the action camera out of the Pi while a clip was playing left the screen on the Pi's text console, with the player and the list of clips still shown in the web interface.** Playback now stops by itself, exactly as if Stop had been pressed, and the idle screen comes back within a few seconds. The same happens whenever the player stops for another reason (the clip ends, or the file can no longer be read). The list of clips is hidden while no USB drive is detected, and a clip from a drive that is gone can no longer be started.
+- A drive pulled out during playback no longer leaves a dead mount behind on the Pi.
+
 ## 0.3.49
 
 - **Fixed: after switching the monitor off and on again, the Pi showed its text console instead of the picture until the service was restarted.** The Pi now notices that its picture is no longer on the output (within a few seconds) and puts it back, whether the monitor was away for a moment or for a while.
