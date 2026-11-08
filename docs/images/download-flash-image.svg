@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="460" height="104" viewBox="0 0 460 104" fill="none">
+  <title>Download the SD-card flash image (684 MB)</title>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fe0d4"/>
+      <stop offset="1" stop-color="#3fbfb3"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="458" height="102" rx="18" fill="url(#g)" stroke="#2a9d93" stroke-width="2"/>
+  <!-- SD card with a download arrow -->
+  <g transform="translate(26 22)" stroke="#0c0f14" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M14 2H40A6 6 0 0 1 46 8V52A6 6 0 0 1 40 58H8A6 6 0 0 1 2 52V14Z" fill="#0c0f14" fill-opacity=".08"/>
+    <path d="M16 10V18M24 10V18M32 10V18"/>
+    <path d="M24 28V46M16 39L24 47L32 39"/>
+  </g>
+  <text x="96" y="47" font-family="Inter, 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="25" font-weight="700" fill="#0c0f14">Download flash image</text>
+  <text x="96" y="76" font-family="Inter, 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="17" font-weight="500" fill="#0c0f14" fill-opacity=".78">v0.3.49 · 684 MB · new SD card (.img.xz)</text>
+</svg>

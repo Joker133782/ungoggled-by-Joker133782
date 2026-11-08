@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="460" height="104" viewBox="0 0 460 104" fill="none">
+  <title>Download the in-place update (18 MB)</title>
+  <rect x="1" y="1" width="458" height="102" rx="18" fill="#11151d" stroke="#4fd1c5" stroke-width="2"/>
+  <!-- package with an upward arrow: update in place -->
+  <g transform="translate(26 22)" stroke="#4fd1c5" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M24 2L45 13V45L24 56L3 45V13Z" fill="#4fd1c5" fill-opacity=".08"/>
+    <path d="M3 13L24 24L45 13M24 24V56" stroke-opacity=".45"/>
+    <path d="M34 40V28M28.5 33.5L34 28L39.5 33.5" stroke-width="2.8"/>
+  </g>
+  <text x="96" y="47" font-family="Inter, 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="25" font-weight="700" fill="#e6ebf2">Download update</text>
+  <text x="96" y="76" font-family="Inter, 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="17" font-weight="500" fill="#9aa3b2">v0.3.49 · 18 MB · for a running Pi (.tar.gz)</text>
+</svg>

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" fill="none">
+  <title>ungoggled</title>
+  <defs>
+    <radialGradient id="glow" cx="640" cy="150" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4fd1c5" stop-opacity=".16"/>
+      <stop offset=".55" stop-color="#4fd1c5" stop-opacity=".04"/>
+      <stop offset="1" stop-color="#4fd1c5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0c0f14" stop-opacity="0"/>
+      <stop offset="1" stop-color="#0c0f14" stop-opacity=".9"/>
+    </linearGradient>
+    <clipPath id="frame"><rect width="1280" height="360" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="1280" height="360" fill="#0c0f14"/>
+    <rect width="1280" height="360" fill="url(#glow)"/>
+    <!-- signal waves, like the web console's background -->
+    <g stroke="#4fd1c5" stroke-linecap="round" fill="none">
+      <path d="M440 150A200 200 0 0 1 840 150" stroke-opacity=".22" stroke-width="2"/>
+      <path d="M360 150A280 280 0 0 1 920 150" stroke-opacity=".15" stroke-width="2"/>
+      <path d="M270 150A370 370 0 0 1 1010 150" stroke-opacity=".10" stroke-width="2"/>
+      <path d="M170 150A470 470 0 0 1 1110 150" stroke-opacity=".07" stroke-width="2"/>
+      <path d="M60 150A580 580 0 0 1 1220 150" stroke-opacity=".05" stroke-width="2"/>
+    </g>
+    <rect y="200" width="1280" height="160" fill="url(#fade)"/>
+    <!-- goggles logo glyph -->
+    <g transform="translate(586 40) scale(1.7)" stroke="#4fd1c5" stroke-width="3.2">
+      <path d="M19 30H45A11 11 0 0 1 45 52H38.5L35.6 47.2A4 4 0 0 0 28.4 47.2L25.5 52H19A11 11 0 0 1 19 30Z" stroke-linejoin="round"/>
+      <circle cx="22.5" cy="41" r="4" fill="#4fd1c5" stroke="none"/>
+      <circle cx="41.5" cy="41" r="4" fill="#4fd1c5" stroke="none"/>
+      <path d="M24 24A11 11 0 0 1 40 24" stroke-linecap="round"/>
+      <path d="M19 18A18 18 0 0 1 45 18" stroke-linecap="round" opacity=".55"/>
+    </g>
+    <text x="640" y="250" text-anchor="middle" font-family="Inter, 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="84" font-weight="700" letter-spacing="-2"><tspan fill="#4fd1c5">un</tspan><tspan fill="#e6ebf2">goggled</tspan></text>
+    <text x="640" y="300" text-anchor="middle" font-family="Inter, 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="24" fill="#9aa3b2">DJI goggles video on any HDMI screen, with a Raspberry Pi 4</text>
+    <rect x="1" y="1" width="1278" height="358" rx="23" stroke="#1f2733" stroke-width="2"/>
+  </g>
+</svg>
