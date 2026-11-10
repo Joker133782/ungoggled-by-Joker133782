@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.51
+
+- **New: 4K at 60 Hz on the first HDMI port.** The Pi's boot setting `hdmi_enable_4kp60` is now switched on by the update, and in new flash images. The video chip then runs a little faster (550 instead of 500 MHz), which plays big action-camera clips a few pictures per second smoother, and a monitor that can do it now lists 3840x2160 at 50 and 60 Hz in Settings, HDMI. This needs one restart of the Pi after the update; the interface tells you when. 4K at 60 Hz only works on the HDMI port next to the USB-C port and needs a high-speed HDMI cable; "Automatic" still picks 1080p. A value set by hand in `config.txt` wins.
+- **New: the fan switches on from 60 C.** A fan on GPIO 14 (what raspi-config sets up under Performance Options, Fan) is now controlled by the Pi's own temperature from 60 C by default, also after the one restart. A fan that was already set up by hand (another pin or temperature) is left as it is. A Pi without a fan is not affected.
+
 ## 0.3.50
 
 - **Fixed: pulling the action camera out of the Pi while a clip was playing left the screen on the Pi's text console, with the player and the list of clips still shown in the web interface.** Playback now stops by itself, exactly as if Stop had been pressed, and the idle screen comes back within a few seconds. The same happens whenever the player stops for another reason (the clip ends, or the file can no longer be read). The list of clips is hidden while no USB drive is detected, and a clip from a drive that is gone can no longer be started.

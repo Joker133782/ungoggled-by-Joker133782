@@ -81,7 +81,7 @@ impl Fake {
             modprobe_ok: true,
             dpkg_ok: true,
             held: RefCell::default(),
-            vcgencmd: "core_freq_min=0".into(),
+            vcgencmd: "core_freq_min=0\nhdmi_enable_4kp60=0".into(),
         }
     }
     fn calls(&self, program: &str) -> Vec<String> {
@@ -148,7 +148,16 @@ impl Host for Fake {
             "modprobe" => {
                 bail!("modprobe: ERROR: could not insert 'rpi_hevc_dec': Exec format error")
             }
-            "vcgencmd" => Ok(format!("{}\n", self.vcgencmd)),
+            "vcgencmd" => {
+                // `vcgencmd get_config KEY` answers with that key's line only.
+                let key = format!("{}=", args.last().copied().unwrap_or_default());
+                Ok(self
+                    .vcgencmd
+                    .lines()
+                    .find(|l| l.starts_with(&key))
+                    .map(|l| format!("{l}\n"))
+                    .unwrap_or_default())
+            }
             other => bail!("unexpected command {other}"),
         }
     }
@@ -218,6 +227,8 @@ impl Pi {
 const BLOCK: &str = "# >>> ungoggled system fixes (managed automatically, edits here are replaced)
 [all]
 core_freq_min=500
+hdmi_enable_4kp60=1
+dtoverlay=gpio-fan,gpiopin=14,temp=60000
 dtoverlay=ungoggled-hevc-cma
 # <<< ungoggled system fixes
 ";
@@ -387,10 +398,10 @@ fn someone_elses_core_freq_min_is_respected() {
         false,
     )
     .unwrap();
-    assert!(
-        e.text
-            .ends_with("[all]\ncore_freq_min=500\n# <<< ungoggled system fixes\n")
-    );
+    assert!(e.text.ends_with(
+        "[all]\ncore_freq_min=500\nhdmi_enable_4kp60=1\ndtoverlay=gpio-fan,gpiopin=14,temp=60000\n\
+                 # <<< ungoggled system fixes\n"
+    ));
 }
 
 #[test]
@@ -402,7 +413,8 @@ fn crlf_files_keep_crlf_and_files_without_final_newline_get_one() {
     assert_eq!(
         e.text,
         "dtoverlay=vc4-kms-v3d,cma-size=0x28000000\narm_64bit=1\n\n\
-         # >>> ungoggled system fixes (managed automatically, edits here are replaced)\n[all]\ncore_freq_min=500\n# <<< ungoggled system fixes\n"
+         # >>> ungoggled system fixes (managed automatically, edits here are replaced)\n[all]\ncore_freq_min=500\n\
+         hdmi_enable_4kp60=1\ndtoverlay=gpio-fan,gpiopin=14,temp=60000\n# <<< ungoggled system fixes\n"
     );
     assert_eq!(edit_config(e.text.as_bytes(), false).unwrap().text, e.text);
 }
@@ -625,11 +637,19 @@ fn pending_compares_configuration_with_the_running_system() {
         "sys/module/rpi_hevc_dec/srcversion",
         b"A8E8382C2538332363EC202\n",
     );
-    // Just updated, not rebooted: clock floor, pool and module all pending.
+    // Just updated, not rebooted: clock floor, 4Kp60, fan, pool and module
+    // all pending.
     let reasons = pending(&pi.root, &host);
-    assert_eq!(reasons.len(), 3, "{reasons:?}");
+    assert_eq!(reasons.len(), 5, "{reasons:?}");
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.starts_with("hdmi_enable_4kp60=1 not active"))
+    );
+    assert!(reasons.iter().any(|r| r.starts_with("fan control appears")));
     // After the reboot.
-    host.vcgencmd = "core_freq_min=500".into();
+    host.vcgencmd = "core_freq_min=500\nhdmi_enable_4kp60=1".into();
+    write("proc/device-tree/gpio-fan@0/compatible", b"gpio-fan\0");
     write(&format!("{DECODER_NODE}/memory-region"), &[0, 0, 0, 1]);
     write(
         "sys/module/rpi_hevc_dec/srcversion",
@@ -674,4 +694,53 @@ fn remove_and_enable_are_reversible() {
     apply(&o, &host);
     assert_eq!(pi.config(), format!("{IMAGE_CONFIG}\n{BLOCK}"));
     assert!(pi.module().is_file());
+}
+
+#[test]
+fn someone_elses_4k60_and_fan_settings_are_respected() {
+    let base = "dtoverlay=vc4-kms-v3d,cma-size=0x28000000\n";
+    // Already set by hand: not repeated, nothing missing.
+    let e = edit_config(
+        format!("{base}[all]\nhdmi_enable_4kp60=1\ndtoverlay=gpio-fan,gpiopin=12,temp=70000\n")
+            .as_bytes(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(e.text.matches("hdmi_enable_4kp60").count(), 1);
+    assert_eq!(e.text.matches("gpio-fan").count(), 1, "{}", e.text);
+    assert!(e.text.contains("gpiopin=12,temp=70000"));
+    assert!(e.missing.is_empty(), "{:?}", e.missing);
+    // Switched off on purpose: left alone and reported.
+    let e = edit_config(format!("{base}hdmi_enable_4kp60=0\n").as_bytes(), false).unwrap();
+    assert_eq!(e.text.matches("hdmi_enable_4kp60").count(), 1);
+    assert_eq!(e.missing, ["hdmi_enable_4kp60"]);
+    // Under a filter that does not match a Pi 4 it does not count.
+    let e = edit_config(
+        format!("{base}[pi5]\nhdmi_enable_4kp60=0\ndtoverlay=gpio-fan,gpiopin=2\n").as_bytes(),
+        false,
+    )
+    .unwrap();
+    assert!(e.text.contains("hdmi_enable_4kp60=1"));
+    assert!(e.text.contains("dtoverlay=gpio-fan,gpiopin=14,temp=60000"));
+    // A different overlay whose name merely starts like the fan's is not one.
+    let e = edit_config(
+        format!("{base}dtoverlay=gpio-fan-extra\n").as_bytes(),
+        false,
+    )
+    .unwrap();
+    assert!(e.text.contains("dtoverlay=gpio-fan,gpiopin=14"));
+}
+
+/// The test Pi's `config.txt` after the owner had added both lines by hand
+/// next to the block: a run must change nothing.
+#[test]
+fn lines_added_by_hand_next_to_the_block_survive_a_run() {
+    let config = format!(
+        "{IMAGE_CONFIG}\n# >>> ungoggled system fixes (managed automatically, edits here are replaced)\n\
+         [all]\ncore_freq_min=500\ndtoverlay=ungoggled-hevc-cma\n# <<< ungoggled system fixes\n\
+         hdmi_enable_4kp60=1\n[all]\ndtoverlay=gpio-fan,gpiopin=14,temp=60000\n"
+    );
+    let e = edit_config(config.as_bytes(), true).unwrap();
+    assert_eq!(e.text, config);
+    assert!(e.missing.is_empty(), "{:?}", e.missing);
 }

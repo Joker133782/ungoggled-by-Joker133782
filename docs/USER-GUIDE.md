@@ -45,7 +45,13 @@ choose any other mode the display advertises, including interlaced modes such as
 rate, so 1080i60 carries 30 full frames per second. Video is scaled to the
 selected resolution. Applying a mode briefly interrupts output. A 60 Hz HDMI signal may carry a 30 fps camera feed: the UI shows those
 rates separately. It does not increase the camera frame rate. With a display on
-each micro-HDMI port you can also pick the output port.
+each micro-HDMI port you can also pick the output port. Since 0.3.51 the Pi
+also lists 3840x2160 at 50 and 60 Hz when the display offers it
+(`hdmi_enable_4kp60`, which also raises the video chip's clock a little): that
+works only on the micro-HDMI port next to the USB-C port and needs a
+high-speed (HDMI 2.0) cable, and the automatic mode keeps using 1080p. If the
+picture turns black after choosing a 4K mode, pick Automatic again and restart
+the Pi if it does not come back.
 
 **Stretch to fill the screen:** two switches under **Settings → HDMI**, “Stretch
 the live picture to fill the screen” and “Stretch USB videos to fill the screen”,

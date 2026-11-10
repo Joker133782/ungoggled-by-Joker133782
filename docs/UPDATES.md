@@ -66,13 +66,15 @@ build runs the same command inside the image (`--offline --strict
 --kernel-release ...`), so a fresh image and an updated Pi end up identical.
 
 - `config.txt` (`/boot/firmware/config.txt`): a marked block at the end
-  (`[all]`, `core_freq_min=500`, `dtoverlay=ungoggled-hevc-cma`) and
+  (`[all]`, `core_freq_min=500`, `hdmi_enable_4kp60=1`,
+  `dtoverlay=gpio-fan,gpiopin=14,temp=60000`, `dtoverlay=ungoggled-hevc-cma`) and
   `cma-size=0x28000000` on the single `vc4-kms-v3d` line if it is missing or
   smaller. Idempotent, written atomically (temp file, fsync, rename, directory
   fsync); `config.txt.ungoggled-orig` (before the first change) and
   `config.txt.ungoggled-prev` (before the latest one) are kept. A file with an
   unexpected shape, or that cannot be read or written, is left alone and
-  logged. A value someone else set (`core_freq_min`, a bigger CMA pool) wins.
+  logged. A value someone else set (`core_freq_min`, `hdmi_enable_4kp60`, a
+  `gpio-fan` overlay of any pin or temperature, a bigger CMA pool) wins.
 - Patched `rpi-hevc-dec` in `/lib/modules/RELEASE/updates/ungoggled/` plus
   `overlays/ungoggled-hevc-cma.dtbo`, only if the kernel release, the
   `linux-image-RELEASE` package version and the stock module's vermagic match
@@ -84,7 +86,8 @@ build runs the same command inside the image (`--offline --strict
   `linux-headers-*` and `linux-kbuild-*` package is on `apt-mark hold`
   (released again when the module goes).
 - Nothing reboots. `/api/status` reports `reboot_required` (configured but not
-  yet running: `vcgencmd get_config core_freq_min`, the `linux,cma` size and
+  yet running: `vcgencmd get_config core_freq_min` and `hdmi_enable_4kp60`,
+  the `gpio-fan` node in `/proc/device-tree`, the `linux,cma` size and
   the decoder's `memory-region` in `/proc/device-tree`, the loaded module's
   `srcversion`), and the web interface asks for a reboot.
 - A failure here never stops the service: `prepare-pi.sh` only logs it. After

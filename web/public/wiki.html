@@ -184,6 +184,14 @@
             two screens at once, "Output port" picks which one gets the
             picture.
           </p>
+          <p>
+            Automatic always uses 1080p (up to 60 Hz). If your screen can do
+            4K at 60 Hz it is listed too, but that works only on the port next
+            to the USB-C power input and needs a high-speed (HDMI 2.0) cable.
+            If the picture turns black after choosing a 4K mode, choose
+            Automatic again, and restart the Pi if the picture does not come
+            back.
+          </p>
           <h3>Stretch to fill the screen</h3>
           <p>
             Normally a picture is shown in its own shape, so a 4:3 picture
@@ -562,6 +570,15 @@
             <li>
               Pulling out the action camera while a clip plays now stops the
               player by itself and brings the idle screen back
+            </li>
+            <li>
+              4K at 60 Hz on the first HDMI port (the one next to the USB-C
+              port), and a little smoother playback of big clips; needs one
+              restart after the update
+            </li>
+            <li>
+              A fan on GPIO 14 now switches on from 60 &deg;C by itself (also
+              after that restart)
             </li>
           </ul>
         </article>

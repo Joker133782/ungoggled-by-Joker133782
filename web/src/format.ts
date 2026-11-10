@@ -8,6 +8,12 @@ export function modeLabel(mode: string): string {
   if (!m) return mode;
   return `${m[1]} × ${m[2]} · ${m[3]} Hz${scan(m[4] === "i")}`;
 }
+// A mode of 3840 pixels or more across at 50 Hz or more ("3840x2160@60"),
+// which only the first HDMI port can do and which needs a good cable.
+export function is4k60(mode: string): boolean {
+  const m = /^(\d+)x(\d+)@(\d+)(i?)$/.exec(mode);
+  return !!m && Number(m[1]) >= 3840 && Number(m[3]) >= 50 && m[4] === "";
+}
 export function agoLabel(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   if (s < 60) return `${s}s ago`;

@@ -7,7 +7,7 @@ import {
 } from "react";
 import type { Status, Settings, ImageLibrary, HdmiConnector } from "./types";
 import { api, headers, usePolling } from "./api";
-import { modeLabel, number, scan, size, skewLabel } from "./format";
+import { is4k60, modeLabel, number, scan, size, skewLabel } from "./format";
 import { useRoute } from "./route";
 import { Preview } from "./components/Preview";
 import { Versions } from "./components/Versions";
@@ -515,6 +515,12 @@ export default function App() {
                     ))}
                   </select>
                 </div>
+                <p className="help">
+                  Automatic uses 1080p (up to 60 Hz), which is right for almost
+                  everyone.
+                  {modes.some(is4k60) &&
+                    " 4K at 60 Hz works only on the HDMI port next to the USB-C power input and needs a high-speed (HDMI 2.0) cable. If the picture turns black after choosing a 4K mode, choose Automatic again, and restart the Pi if the picture does not come back."}
+                </p>
                 {hdmiConnectors && hdmiConnectors.length > 1 && (
                   <>
                     <label htmlFor="hdmi-connector">Output port</label>

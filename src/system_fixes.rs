@@ -16,8 +16,9 @@
 //! Way back: `ungoggled system-fixes remove-module` removes the module, its
 //! overlay line and file and the kernel package hold, and keeps them off
 //! (`enable-module` undoes that). `core_freq_min` and the CMA size are plain
-//! `config.txt` lines; the file from before the first change is kept as
-//! `config.txt.ungoggled-orig`.
+//! `config.txt` lines, as are `hdmi_enable_4kp60` and the `gpio-fan` overlay
+//! line (a value or overlay someone set outside the managed block wins); the
+//! file from before the first change is kept as `config.txt.ungoggled-orig`.
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -52,6 +53,20 @@ const STOCK_MODULE: &str = "kernel/drivers/media/platform/raspberrypi/hevc_dec/r
 /// 4096x3072 action-cam clip onto 1080p then underflows the HVS FIFO (black
 /// screen): EUFLOW only ever seen below 325 MHz, never at 500 (FINDINGS.MD).
 pub const CORE_FREQ_MIN: &str = "500";
+/// HDMI0 4Kp60 (`hdmi_enable_4kp60=1`): the firmware then runs the core clock
+/// at 550 MHz, which plays big action-cam clips a few frames per second faster
+/// (FINDINGS.MD), and lists the monitor's 4K 50/60 Hz modes. Only the first
+/// HDMI port (HDMI0, next to the USB-C port) can do 4Kp60. Never combine it
+/// with `hevc_freq` >= 600 or an `over_voltage_delta`: that killed the
+/// VideoCore firmware on the test Pi.
+pub const HDMI_4KP60: &str = "1";
+/// The case or hat fan on a GPIO pin, switched on by the kernel's `gpio-fan`
+/// overlay (what raspi-config's "Performance Options > Fan" writes) from this
+/// temperature, in millidegrees Celsius. A Pi without a fan on GPIO 14 is not
+/// affected: the pin carries the unused UART transmit line.
+pub const FAN_GPIO: u32 = 14;
+pub const FAN_ON_MILLI_C: u32 = 60_000;
+const FAN_OVERLAY: &str = "gpio-fan";
 /// 640 MiB default CMA pool (`vc4-kms-v3d,cma-size=`). The default 512 MiB is
 /// too small for GStreamer `v4l2slh265dec`, which pre-allocates a DPB sized
 /// from the stream's declared level before the decoder gets its own ~45 MiB
@@ -682,6 +697,40 @@ fn cma_param(param: &str) -> Option<Result<u64, String>> {
             .map_err(|_| format!("unknown CMA parameter '{p}'")),
     )
 }
+/// The overlay a `dtoverlay=` value loads: its name, before any parameters.
+fn overlay_name(value: &str) -> Option<&str> {
+    value.split(',').next().map(str::trim)
+}
+/// Whether our `key=want` line belongs in the block: not when someone else
+/// set the key outside it where it applies on a Pi 4 (the last such line
+/// wins), which is then noted, and reported as missing if it differs.
+fn plain_setting(
+    parsed: &[Line<'_>],
+    key: &'static str,
+    want: &str,
+    notes: &mut Vec<String>,
+    missing: &mut Vec<&'static str>,
+) -> bool {
+    let theirs = parsed
+        .iter()
+        .filter(|l| !l.managed && l.applies())
+        .filter_map(|l| l.setting())
+        .filter(|(k, _)| *k == key)
+        .map(|(_, v)| v)
+        .next_back();
+    match theirs {
+        Some(v) if v == want => {
+            notes.push(format!("{key}: already {v}"));
+            false
+        }
+        Some(v) => {
+            notes.push(format!("{key}: left at {v} (set outside ungoggled)"));
+            missing.push(key);
+            false
+        }
+        None => true,
+    }
+}
 fn is_vc4(value: &str) -> bool {
     matches!(
         value.split(',').next().map(str::trim),
@@ -701,26 +750,35 @@ fn edit_config(old: &[u8], overlay: bool) -> Result<Edit, String> {
     let mut notes = Vec::new();
     let mut missing = Vec::new();
     let user = || parsed.iter().filter(|l| !l.managed);
-    // core_freq_min: respect a value someone else set where it applies.
-    let theirs = user()
-        .filter(|l| l.applies())
-        .filter_map(|l| l.setting())
-        .filter(|(k, _)| *k == "core_freq_min")
-        .map(|(_, v)| v)
-        .next_back();
-    let core = match theirs {
-        Some(v) if v == CORE_FREQ_MIN => {
-            notes.push(format!("core_freq_min: already {v}"));
-            false
-        }
-        Some(v) => {
+    // core_freq_min and hdmi_enable_4kp60: respect a value someone else set
+    // where it applies.
+    let core = plain_setting(
+        &parsed,
+        "core_freq_min",
+        CORE_FREQ_MIN,
+        &mut notes,
+        &mut missing,
+    );
+    let hdmi_4kp60 = plain_setting(
+        &parsed,
+        "hdmi_enable_4kp60",
+        HDMI_4KP60,
+        &mut notes,
+        &mut missing,
+    );
+    // The fan: any gpio-fan overlay outside our block (what raspi-config
+    // wrote, say) is the owner's choice of pin and temperature and stays.
+    let fan = {
+        let elsewhere = user()
+            .filter(|l| l.applies())
+            .filter_map(|l| l.setting())
+            .any(|(k, v)| k == "dtoverlay" && overlay_name(v) == Some(FAN_OVERLAY));
+        if elsewhere {
             notes.push(format!(
-                "core_freq_min: left at {v} (set outside ungoggled)"
+                "{FAN_OVERLAY}: already listed outside the ungoggled block"
             ));
-            missing.push("core_freq_min");
-            false
         }
-        None => true,
+        !elsewhere
     };
     // The overlay line exists only together with the patched module.
     let overlay = overlay && {
@@ -804,6 +862,15 @@ fn edit_config(old: &[u8], overlay: bool) -> Result<Edit, String> {
         block.push(format!("core_freq_min={CORE_FREQ_MIN}"));
         notes.push(format!("core_freq_min: {CORE_FREQ_MIN}"));
     }
+    if hdmi_4kp60 {
+        block.push(format!("hdmi_enable_4kp60={HDMI_4KP60}"));
+        notes.push(format!("hdmi_enable_4kp60: {HDMI_4KP60}"));
+    }
+    if fan {
+        let line = format!("dtoverlay={FAN_OVERLAY},gpiopin={FAN_GPIO},temp={FAN_ON_MILLI_C}");
+        notes.push(format!("{line}: listed"));
+        block.push(line);
+    }
     if overlay {
         block.push(format!("dtoverlay={OVERLAY_NAME}"));
         notes.push(format!("dtoverlay={OVERLAY_NAME}: listed"));
@@ -879,7 +946,30 @@ pub fn pending(root: &Path, host: &impl Host) -> Vec<String> {
     {
         reasons.push(format!("core_freq_min={want} not active ({})", out.trim()));
     }
+    if let Some(want) = effective("hdmi_enable_4kp60").last()
+        && let Ok(out) = host.run("vcgencmd", &["get_config", "hdmi_enable_4kp60"])
+        && out.trim().strip_prefix("hdmi_enable_4kp60=") != Some(want.as_str())
+    {
+        reasons.push(format!(
+            "hdmi_enable_4kp60={want} not active ({})",
+            out.trim()
+        ));
+    }
     let overlays = effective("dtoverlay");
+    // The fan overlay shows up in the device tree as a `gpio-fan` node.
+    let device_tree = root.join("proc/device-tree");
+    if device_tree.is_dir()
+        && overlays
+            .iter()
+            .any(|v| overlay_name(v) == Some(FAN_OVERLAY))
+        && !fs::read_dir(&device_tree)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with(FAN_OVERLAY))
+    {
+        reasons.push("fan control appears after the next boot".to_owned());
+    }
     let cma = overlays
         .iter()
         .filter(|v| is_vc4(v))
