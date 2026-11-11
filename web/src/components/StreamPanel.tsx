@@ -18,7 +18,8 @@ const ShareSheet = lazy(() => import("./ShareSheet"));
  * — three independent copies of the same server-side Settings object (this,
  * RecordingPanel, App) used to race: saving one here could silently revert
  * a change made moments earlier in another panel, since each POSTs the
- * whole object from its own possibly-stale state.
+ * whole object from its own possibly-stale state. `onSave` now takes only
+ * the changed fields; App merges them into freshly fetched settings.
  */
 export function StreamPanel({
   disabled,
@@ -27,7 +28,7 @@ export function StreamPanel({
 }: {
   disabled: boolean;
   settings: Settings | null;
-  onSave: (next: Settings) => Promise<void>;
+  onSave: (patch: Partial<Settings>) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -45,11 +46,11 @@ export function StreamPanel({
     }
   }
 
-  async function save(next: Settings) {
+  async function save(patch: Partial<Settings>) {
     setBusy(true);
     setError("");
     try {
-      await onSave(next);
+      await onSave(patch);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
     } finally {
@@ -63,8 +64,8 @@ export function StreamPanel({
   function setQuality(quality: "high" | "event", on: boolean) {
     void save(
       on
-        ? { ...settings!, stream_enabled: true, stream_quality: quality }
-        : { ...settings!, stream_enabled: false },
+        ? { stream_enabled: true, stream_quality: quality }
+        : { stream_enabled: false },
     );
   }
   return (

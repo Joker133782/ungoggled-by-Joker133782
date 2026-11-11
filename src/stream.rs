@@ -7,15 +7,27 @@
 use anyhow::{Context, Result};
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::{Arc, Mutex},
+    process::{Child, Command, Stdio},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, SyncSender, TrySendError},
+    },
     thread,
+    time::{Duration, Instant},
 };
 use tokio::sync::broadcast;
 
 /// Spectator-side chunks never need to be huge; keep enough queued that a
 /// brief stall doesn't drop a keyframe interval's worth of data.
 const CHANNEL_CAPACITY: usize = 256;
+/// How many NAL units may wait for the relay's stdin. The video loop never
+/// waits for the relay: if it falls behind (a software transcode that cannot
+/// keep up) the units are dropped instead, and the picture of the spectators
+/// resumes at the next keyframe. Otherwise a slow spectator stream would
+/// slow the live HDMI picture down with it.
+const FEED_QUEUE: usize = 128;
+/// After the relay has failed, wait this long before starting another one.
+const RESTART_AFTER_FAILURE: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Quality {
@@ -38,45 +50,101 @@ impl Quality {
 
 struct Relay {
     child: Child,
-    stdin: ChildStdin,
+    /// Units for the thread that owns the relay's stdin.
+    queue: SyncSender<Vec<u8>>,
+    /// Dropping units because the queue was full; held until the next SPS so
+    /// the stream resumes at a clean start instead of in the middle of a
+    /// picture group.
+    skipping: bool,
     quality: Quality,
     tx: broadcast::Sender<Vec<u8>>,
+    /// The last line the relay printed to its stderr, for the log if it dies.
+    last_message: Arc<Mutex<String>>,
+}
+
+#[derive(Default)]
+struct State {
+    relay: Option<Relay>,
+    /// No new relay before this time (it failed a moment ago).
+    retry_at: Option<Instant>,
+}
+impl State {
+    fn failed(&mut self) {
+        if let Some(relay) = self.relay.take() {
+            let message = relay.last_message.lock().unwrap().clone();
+            eprintln!(
+                "Spectator stream stopped{}",
+                if message.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {message}")
+                }
+            );
+        }
+        self.retry_at = Some(Instant::now() + RESTART_AFTER_FAILURE);
+    }
 }
 
 #[derive(Clone, Default)]
-pub struct Controller(Arc<Mutex<Option<Relay>>>);
+pub struct Controller(Arc<Mutex<State>>);
 impl Controller {
     /// Make sure a relay at this quality is running, (re)starting it if it
-    /// is not running yet or is running at a different quality.
+    /// is not running yet or is running at a different quality. One that
+    /// failed is not started again for a while: it would fail the same way,
+    /// and every start costs the video loop that calls this.
     pub fn ensure(&self, quality: Quality) {
-        let mut guard = self.0.lock().unwrap();
-        if guard.as_ref().is_some_and(|r| r.quality == quality) {
+        let mut state = self.0.lock().unwrap();
+        if state.relay.as_ref().is_some_and(|r| r.quality == quality) {
             return;
         }
-        *guard = None;
+        state.relay = None;
+        if state.retry_at.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
         match spawn(quality) {
-            Ok(relay) => *guard = Some(relay),
-            Err(e) => eprintln!("Spectator stream: {e:#}"),
+            Ok(relay) => {
+                state.relay = Some(relay);
+                state.retry_at = None;
+            }
+            Err(e) => {
+                eprintln!("Spectator stream: {e:#}");
+                state.failed();
+            }
         }
     }
     pub fn stop(&self) {
-        *self.0.lock().unwrap() = None;
+        let mut state = self.0.lock().unwrap();
+        state.relay = None;
+        state.retry_at = None;
     }
-    /// Feed one NAL from the live goggles stream, if a relay is running.
+    /// Hand one NAL from the live goggles stream to the relay, if one is
+    /// running. Never waits for the relay.
     pub fn feed(&self, nal: &[u8]) {
-        let mut guard = self.0.lock().unwrap();
-        if let Some(relay) = &mut *guard
-            && relay.stdin.write_all(&patch_sps_level(nal)).is_err()
-        {
-            *guard = None;
+        let mut state = self.0.lock().unwrap();
+        let Some(relay) = &mut state.relay else {
+            return;
+        };
+        let is_sps = nal.get(3).map(|b| b & 31) == Some(7);
+        if relay.skipping && !is_sps {
+            return;
+        }
+        match relay.queue.try_send(patch_sps_level(nal).into_owned()) {
+            Ok(()) => relay.skipping = false,
+            Err(TrySendError::Full(_)) => relay.skipping = true,
+            Err(TrySendError::Disconnected(_)) => state.failed(),
         }
     }
     /// A receiver for MPEG-TS bytes, if a relay is currently running.
     pub fn subscribe(&self) -> Option<broadcast::Receiver<Vec<u8>>> {
-        self.0.lock().unwrap().as_ref().map(|r| r.tx.subscribe())
+        self.0
+            .lock()
+            .unwrap()
+            .relay
+            .as_ref()
+            .map(|r| r.tx.subscribe())
     }
     pub fn running(&self) -> bool {
-        self.0.lock().unwrap().is_some()
+        self.0.lock().unwrap().relay.is_some()
     }
 }
 
@@ -101,6 +169,9 @@ fn patch_sps_level(nal: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 }
 
 fn spawn(quality: Quality) -> Result<Relay> {
+    start(relay_command(quality), quality)
+}
+fn relay_command(quality: Quality) -> Command {
     let mut cmd = Command::new("gst-launch-1.0");
     cmd.args(["fdsrc", "fd=0", "!", "h264parse", "config-interval=-1", "!"]);
     match quality {
@@ -141,20 +212,39 @@ fn spawn(quality: Quality) -> Result<Relay> {
         }
     }
     cmd.args(["mpegtsmux", "!", "fdsink", "fd=1"]);
+    cmd
+}
+/// Runs `cmd` as the relay: units go to its stdin, its stdout is broadcast.
+fn start(mut cmd: Command, quality: Quality) -> Result<Relay> {
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("Cannot start the streaming relay (gst-launch-1.0)")?;
-    let stdin = child.stdin.take().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    thread::spawn(
-        move || {
-            for _ in BufReader::new(stderr).lines().map_while(Result::ok) {}
-        },
-    );
+    let last_message = Arc::new(Mutex::new(String::new()));
+    let seen = last_message.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if !line.trim().is_empty() {
+                *seen.lock().unwrap() = line.chars().take(300).collect();
+            }
+        }
+    });
+    // The only place that waits for the relay to take its input. When the
+    // relay dies the write fails, the thread ends and the queue disconnects,
+    // which `feed` notices.
+    let (queue, units) = mpsc::sync_channel::<Vec<u8>>(FEED_QUEUE);
+    thread::spawn(move || {
+        while let Ok(unit) = units.recv() {
+            if stdin.write_all(&unit).is_err() {
+                return;
+            }
+        }
+    });
     let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
     let sender = tx.clone();
     thread::spawn(move || {
@@ -171,9 +261,11 @@ fn spawn(quality: Quality) -> Result<Relay> {
     });
     Ok(Relay {
         child,
-        stdin,
+        queue,
+        skipping: false,
         quality,
         tx,
+        last_message,
     })
 }
 impl Drop for Relay {
@@ -195,6 +287,91 @@ mod tests {
         assert_eq!(patched[6], 42);
         assert_eq!(&patched[..6], &sps[..6]);
         assert_eq!(&patched[7..], &sps[7..]);
+    }
+
+    /// A relay that is `program` with these arguments instead of GStreamer.
+    fn fake(program: &str, args: &[&str]) -> Controller {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        let c = Controller::default();
+        c.0.lock().unwrap().relay = Some(start(cmd, Quality::High).unwrap());
+        c
+    }
+    fn nal(kind: u8, tag: u8, len: usize) -> Vec<u8> {
+        let mut v = vec![0, 0, 1, kind, tag];
+        v.resize(len.max(5), tag);
+        v
+    }
+
+    #[test]
+    fn units_reach_the_relay_and_its_output_reaches_subscribers() {
+        let c = fake("cat", &[]);
+        let mut rx = c.subscribe().expect("relay running");
+        let unit = nal(0x65, 9, 40);
+        c.feed(&unit);
+        let mut got = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while got.len() < unit.len() && Instant::now() < deadline {
+            if let Ok(chunk) = rx.try_recv() {
+                got.extend(chunk);
+            } else {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert_eq!(got, unit);
+    }
+
+    #[test]
+    fn a_relay_that_stops_reading_never_holds_up_the_caller() {
+        // `sleep` never reads its stdin: the pipe fills, the writer thread
+        // blocks, the queue fills. The video loop must not feel any of it.
+        let c = fake("sleep", &["30"]);
+        let started = Instant::now();
+        for i in 0..2000u32 {
+            let kind = if i % 50 == 0 { 0x67 } else { 0x41 };
+            c.feed(&nal(kind, 1, 100_000));
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "feeding took {:?}",
+            started.elapsed()
+        );
+        assert!(c.running(), "falling behind is not a failure");
+    }
+
+    #[test]
+    fn after_dropping_units_the_stream_resumes_at_the_next_sps() {
+        let c = fake("sleep", &["30"]);
+        for _ in 0..2000 {
+            c.feed(&nal(0x41, 1, 100_000));
+        }
+        assert!(c.0.lock().unwrap().relay.as_ref().unwrap().skipping);
+        // Slices are dropped until a unit that starts a picture group arrives.
+        c.feed(&nal(0x41, 2, 10));
+        assert!(c.0.lock().unwrap().relay.as_ref().unwrap().skipping);
+        c.feed(&nal(0x67, 3, 10));
+        // The queue is still full, so the SPS is dropped too and it keeps
+        // skipping; what matters is that a slice never ends the skipping.
+        assert!(c.running());
+    }
+
+    #[test]
+    fn a_dead_relay_is_dropped_and_not_restarted_at_once() {
+        let c = fake("false", &[]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while c.running() && Instant::now() < deadline {
+            c.feed(&nal(0x41, 1, 10));
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!c.running(), "the dead relay was removed");
+        let retry_at = c.0.lock().unwrap().retry_at.expect("a pause is set");
+        assert!(retry_at > Instant::now() + RESTART_AFTER_FAILURE / 2);
+        // `ensure` honours the pause: it must not try to start gst-launch.
+        c.ensure(Quality::High);
+        assert!(!c.running());
+        // Stopping the stream (the setting turned off) clears the pause.
+        c.stop();
+        assert!(c.0.lock().unwrap().retry_at.is_none());
     }
 
     #[test]

@@ -22,9 +22,31 @@ fps; the System tab shows the Pi's temperature.
 ## Web interface
 
 **Password:** the control interface (settings, recordings, Wi-Fi, everything
-except the spectator stream page) needs a password. The first visit asks you to
-set one. After 5 wrong passwords in a row, that address is locked out for 5
-minutes. Everyone logs in again after an update or reboot.
+except the spectator stream page) needs a password of at least 8 characters. The
+first visit asks you to set one. After 5 wrong passwords in a row, that address
+is locked out for 5 minutes; many wrong passwords from different addresses slow
+the login down for everybody. Everyone logs in again after an update or reboot.
+
+**One password for everything (since 0.3.52):** the control password is also the
+Pi's SSH/`root` password and the one the web terminal asks for. Until a control
+password is set, both are `ungoggled`. Setting or changing the control password
+sets the system password as well (through `chpasswd`, never on a command line); a
+Pi that already had a control password takes it over the first time you log in
+after the update. Changing the root password with `passwd` is possible, but the
+next change of the control password overwrites it again.
+
+**Changing it:** Settings, Password (current password, then the new one twice).
+The change signs every other device out and is applied to the SSH/`root`
+password as well.
+
+**Forgot the password?** The password also opens SSH, so there is no way back in
+over the network. Instead put an empty file named `reset-password` on the SD
+card's boot partition (the small one with `config.txt`; Windows and macOS open
+it) and start the Pi. `prepare-pi.sh` then deletes `auth.json`, sets the
+`root` password back to `ungoggled` and removes the file; the next visit to the
+web interface asks for a new control password as on first start. A damaged
+`auth.json` makes the login refuse everybody with a message pointing to this
+reset (the service itself keeps running).
 
 **Start/stop** (System tab) controls USB reception. **Reconnect goggles** (Live
 tab) restarts the USB session. The display controller stays running so it can
@@ -99,11 +121,38 @@ the same by hand.
 **System:** reboot or shut down the Pi from the web interface; both ask for
 confirmation first. **Download diagnostics** saves a support bundle.
 
+**The log (since 0.3.52):** the Pi keeps its service log on the SD card for 30
+days, also across power cuts, and never more than 100 MB (the oldest part goes
+first), so a problem can be looked at after the flight. The support bundle has
+it all: the service log, the kernel messages (USB events, under-voltage, SD
+card errors), the list of boots, which protocol the goggles were remembered
+with, and the USB state. On the Pi itself:
+
+```
+journalctl -u dji-hdmi              # everything kept, oldest first
+journalctl -u dji-hdmi -b -1        # the boot before this one
+journalctl _TRANSPORT=kernel        # kernel messages
+```
+
+The lines worth searching for: `Goggles protocol:` (which protocol, and how many
+seconds after the start the first picture came), `status phase:` (picture
+starts and stops), `usb_state:`, `power/thermal:` (under-voltage or overheating),
+`heartbeat:` (a summary every minute while goggles are attached) and `DUML`
+(the first message of each kind the goggles send). The time stamps are only
+right once the clock has been set (`clock synced: true`); the Pi has no
+battery-backed clock.
+
 **Terminal:** an optional root shell in the browser, for troubleshooting with
 someone who knows Linux. Off by default; switch it on under **Settings →
 Terminal** and open it from the System tab.
 
-## Beeper, LEDs & power button
+## Beeper, LEDs & buttons
+
+**Goggles type (Settings, first panel, since 0.3.52):** *Automatic* tries the
+Goggles 3 way first and remembers per pair of goggles which way worked; a fixed
+choice (Goggles 3, Goggles 2, FPV Goggles V1/V2) never tries anything else.
+Changing it restarts the receiver. A value of `UNGOGGLED_GOGGLES` in
+`/etc/default/dji-hdmi` still applies while the choice says Automatic.
 
 All optional. Goggles, video and HDMI each get a
 distinct happy tone when they connect and a distinct sad tone when they disconnect,
@@ -118,11 +167,43 @@ clock is synced** (off by default) keeps chirping after boot until a browser has
 opened the web interface (or NTP has synced the clock), so you don't record with a
 wrong date.
 
+**Extra buttons (since 0.3.52):** up to four more momentary switches, each with
+one action: shut the Pi down, reboot it, save the last 30 seconds, start/stop a
+recording, restart the receiver, or run a script. Wire each between its GPIO pin
+and a ground (GND) pin and add it under **Settings → Beeper, LEDs & buttons →
+Add a button**. Each button has a hold time (tap, 1, 2, 3 or 5 seconds);
+shutdown and reboot start with 2 seconds so a knock in a bag does nothing. A
+button on **GPIO 3** (physical pin 5, with the GND pin 6 right next to it) also
+*starts* a Pi that was shut down, so a single switch there can do both. **Add
+power button (GPIO 3)** sets that up in one click. The starting is done by the
+Pi's firmware, not by software (nothing runs while the Pi is off): after a proper
+shutdown the Pi waits with `WAKE_ON_GPIO=1` (the default of the Pi 4 bootloader;
+`POWER_OFF_ON_HALT` must stay `0`) and boots when GPIO 3 is shorted to ground.
+It does not start a Pi whose power was simply cut; that boots as soon as power is
+back. Check the two bootloader values with `vcgencmd bootloader_config`. Every press, and the
+reason when nothing happened (an update being installed, no clip to save yet,
+a script that failed), is written to the log.
+
+A script button runs the file with the name you give from
+`/var/lib/dji-hdmi/button-scripts/` as `root`, with that folder's parent as the
+working directory, for at most 60 seconds. The web interface can only choose a
+name; the file itself has to be put there over SSH or the web terminal and be
+executable:
+
+```
+mkdir -p /var/lib/dji-hdmi/button-scripts
+printf '#!/bin/sh\nsystemctl restart NetworkManager\n' > /var/lib/dji-hdmi/button-scripts/wifi-restart.sh
+chmod +x /var/lib/dji-hdmi/button-scripts/wifi-restart.sh
+```
+
 ## USB - ActionCam Video Player (experimental)
 
 Plug a USB drive or an action camera acting as USB mass storage into one of
 the Pi's regular USB-A ports (never the USB-C gadget port the goggles use).
-It is mounted read-only automatically; video files found on it (`.mp4`,
+It is mounted read-only automatically, but only as FAT/FAT32, exFAT or NTFS
+(what cameras, memory cards and Windows use; since 0.3.52 a drive with another
+filesystem such as ext4 is never opened, and one that cannot be mounted is tried
+again every 30 seconds); video files found on it (`.mp4`,
 `.mov`, `.mkv`, `.avi`, `.m4v`, `.insv`, `.lrv`) are listed in the web
 interface under **USB - ActionCam Video Player** (Videos tab), each with a cached thumbnail (a single
 extracted frame; the cache lives under the runtime directory, which is
@@ -210,8 +291,9 @@ shared with the web interface itself), not the streaming method.
 one to open the stream page. The stream page never asks for the control password.
 
 Delivered as MPEG-TS over one long-lived HTTP connection, decoded in the
-browser with [mpegts.js](https://github.com/xqq/mpegts.js) (loaded from a
-CDN), not HLS: HLS's segment files add several seconds of latency that
+browser with [mpegts.js](https://github.com/xqq/mpegts.js) (shipped with the
+interface and served by the Pi itself, so the page works on the Pi's own Wi-Fi
+without internet), not HLS: HLS's segment files add several seconds of latency that
 cannot be configured away, which defeats the point for live FPV spectating.
 The GStreamer muxing pipeline and `mpegts.js` playback were verified
 end-to-end in a real browser against synthetic test video; not against the

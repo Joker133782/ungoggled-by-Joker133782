@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { newestRelease, type Release } from "./release-version";
+import { withTimeout } from "./api";
 // Disabled on purpose: this must never check (or install from) the
 // original TimoLehnertz/ungoggled repository's releases — doing so would
 // silently overwrite every change made in this fork. The active, working
@@ -27,17 +28,23 @@ async function releases(force: boolean): Promise<unknown> {
   }
   if (!inFlight)
     inFlight = (async () => {
-      const response = await fetch(endpoint, {
-        headers: { Accept: "application/vnd.github+json" },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!response.ok)
-        throw new Error(
-          response.status === 403 || response.status === 429
-            ? "GitHub rate limit reached. Try later."
-            : "Could not check GitHub releases.",
-        );
-      const data: unknown = await response.json();
+      const request = withTimeout(null, 10000);
+      let data: unknown;
+      try {
+        const response = await fetch(endpoint, {
+          headers: { Accept: "application/vnd.github+json" },
+          signal: request.signal,
+        });
+        if (!response.ok)
+          throw new Error(
+            response.status === 403 || response.status === 429
+              ? "GitHub rate limit reached. Try later."
+              : "Could not check GitHub releases.",
+          );
+        data = await response.json();
+      } finally {
+        request.done();
+      }
       if (!Array.isArray(data)) throw new Error("Invalid GitHub response");
       try {
         localStorage.setItem(

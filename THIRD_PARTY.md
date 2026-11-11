@@ -45,6 +45,18 @@ source or binary is embedded in the Rust executable; these are the exact
 packages Debian trixie publishes, under their own licenses (mpv is GPL-2.0-
 or-later). See `scripts/bundle-mpv.sh` for how they are obtained.
 
+## Spectator-page player (mpegts.js, Apache-2.0)
+
+`web/public/mpegts.js` is the unmodified `dist/mpegts.js` of the npm package
+`mpegts.js` 1.8.2 (https://github.com/xqq/mpegts.js), copyright its authors,
+Apache License 2.0. It is served next to `watch.html` so the spectator page
+needs no internet. Package integrity (npm `dist.integrity`):
+`sha512-cZYMa5muASH55wrS6JK5IGkUqnCA96c0f+WdnW91jIK9s/N6NzjmTQDJNYg9A5u/G2Q5nj2b3w1Zwzze/9guxA==`;
+SHA-256 of the file: `bda31748736a69cb610c2edf4623e633f1f4f47b5bda83668c8d287e51b0c3a8`.
+The upstream license is shipped beside it as `mpegts.js.Apache-2.0.txt`, and
+the bundled `es6-promise` notice (MIT) as `mpegts.js.LICENSE.txt`, which the
+file's header refers to.
+
 ## Optional legacy decoder plugin
 
 `scripts/build-legacy-omx.sh` downloads and builds unmodified gst-omx 1.14.4,

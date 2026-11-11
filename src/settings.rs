@@ -5,11 +5,51 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Duration,
 };
+
+/// What a momentary switch on a GPIO pin does.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ButtonAction {
+    /// Power the Pi off.
+    Shutdown,
+    Reboot,
+    /// Save the last ~30 seconds of the live picture.
+    SaveClip,
+    /// Start a recording, or stop the running one.
+    ToggleRecording,
+    /// Restart the goggles receiver (the "Restart" button of the web interface).
+    RestartReceiver,
+    /// Run an executable from `button-scripts/` in the data directory.
+    Script,
+}
+/// A momentary switch between a GPIO pin and ground.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GpioButton {
+    pub pin: u8,
+    pub action: ButtonAction,
+    /// How long the switch has to be held (milliseconds); 0 is a plain tap.
+    /// Shutting down or rebooting by accident (a bag, a vibration) is worse
+    /// than a missed clip, so those want a longer hold.
+    #[serde(default)]
+    pub hold_ms: u32,
+    /// For `ButtonAction::Script`: the file name inside `button-scripts/`.
+    #[serde(default)]
+    pub script: Option<String>,
+}
+pub const MAX_BUTTONS: usize = 4;
+pub const MAX_HOLD_MS: u32 = 10_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// Which goggles to expect: `auto` (try Goggles 3 first, remember what
+    /// worked per pair of goggles), or a fixed `goggles3`, `goggles2` or
+    /// `v1v2` that never tries anything else. While this says `auto`, a value
+    /// from `/etc/default/dji-hdmi` (`UNGOGGLED_GOGGLES`) still applies.
+    pub goggles: String,
     pub hdmi_mode: String,
     /// DRM connector id to render to (as listed by `/api/hdmi-connectors`),
     /// e.g. when two displays are plugged in at once and only one should
@@ -31,6 +71,8 @@ pub struct Settings {
     pub hdmi_led_pin: Option<u8>,
     /// Beep every few seconds until the clock has been synced once since boot.
     pub beep_until_time_synced: bool,
+    /// More momentary switches, each with its own action (at most four).
+    pub buttons: Vec<GpioButton>,
     /// Relay the live feed over the Wi-Fi access point for spectators, at
     /// `stream_quality`. Off by default: this is a deliberate, operator-set
     /// choice, not something that starts on its own.
@@ -73,6 +115,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            goggles: "auto".into(),
             hdmi_mode: "auto".into(),
             hdmi_connector: None,
             fallback_image: Some("default-loop.h264".into()),
@@ -83,6 +126,7 @@ impl Default for Settings {
             video_led_pin: Some(crate::hardware::DEFAULT_VIDEO_LED_PIN),
             hdmi_led_pin: Some(crate::hardware::DEFAULT_HDMI_LED_PIN),
             beep_until_time_synced: false,
+            buttons: Vec::new(),
             stream_enabled: false,
             stream_quality: "high".into(),
             auto_record: false,
@@ -103,6 +147,7 @@ pub struct Store {
 impl Store {
     pub fn open(dir: PathBuf) -> Result<Self> {
         fs::create_dir_all(dir.join("images/thumbs"))?;
+        remove_stale_temp_files(&dir);
         let first_run = !dir.join("settings.json").exists();
         // "No signal" is a permanent built-in like the videos below (see
         // `assets::BUILTINS`); older versions let it be deleted, so put it
@@ -114,6 +159,9 @@ impl Store {
         // The three built-in waiting-screen videos are refreshed on every
         // start (not just first run), so an in-place update replaces their
         // content for an already-provisioned Pi, not only a fresh flash.
+        // "Refreshed" means: written when the file differs. Writing all of
+        // them (about 15 MiB, each with an fsync) on every start would wear
+        // the SD card in a restart loop and fail on a full one.
         // They're treated as permanent menu entries, not user content. Their
         // list thumbnails ship as pre-rendered posters: frames from the raw
         // .h264 can't be grabbed with the mpv recipe used for other videos.
@@ -134,8 +182,8 @@ impl Store {
                 &include_bytes!("../assets/default-comic.jpg")[..],
             ),
         ] {
-            atomic_write(&dir.join("images").join(id), bytes)?;
-            atomic_write(
+            write_if_changed(&dir.join("images").join(id), bytes)?;
+            write_if_changed(
                 &dir.join("images").join(id).with_extension("json"),
                 &serde_json::to_vec(&crate::assets::VideoInfo {
                     width: 1920,
@@ -143,7 +191,7 @@ impl Store {
                     fps: 30.0,
                 })?,
             )?;
-            atomic_write(&crate::assets::thumb_path(&dir.join("images"), id), poster)?;
+            write_if_changed(&crate::assets::thumb_path(&dir.join("images"), id), poster)?;
         }
         let value = match fs::read(dir.join("settings.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
@@ -171,22 +219,19 @@ impl Store {
         if !valid_stream_quality(&value.stream_quality) {
             bail!("Invalid stream quality");
         }
+        if !valid_goggles(&value.goggles) {
+            bail!("Invalid goggles type");
+        }
         if let Some(id) = &value.fallback_image
             && (!valid_id(id) || !self.dir.join("images").join(id).is_file())
         {
             bail!("Unknown fallback image");
         }
-        let pins = [
-            value.beeper_pin,
-            value.power_button_pin,
-            value.goggles_led_pin,
-            value.video_led_pin,
-            value.hdmi_led_pin,
-        ];
-        if pins.into_iter().flatten().any(|p| !valid_pin(p)) {
+        validate_buttons(&value.buttons)?;
+        let configured = configured_pins(&value);
+        if configured.iter().any(|&p| !valid_pin(p)) {
             bail!("GPIO pins must be between 2 and 27");
         }
-        let configured: Vec<u8> = pins.into_iter().flatten().collect();
         let distinct: std::collections::HashSet<u8> = configured.iter().copied().collect();
         if distinct.len() != configured.len() {
             bail!("GPIO pins must all be different");
@@ -213,6 +258,51 @@ pub fn valid_id(id: &str) -> bool {
 pub fn valid_pin(pin: u8) -> bool {
     (2..=27).contains(&pin)
 }
+/// Every GPIO pin the settings use, in no particular order.
+fn configured_pins(s: &Settings) -> Vec<u8> {
+    [
+        s.beeper_pin,
+        s.power_button_pin,
+        s.goggles_led_pin,
+        s.video_led_pin,
+        s.hdmi_led_pin,
+    ]
+    .into_iter()
+    .flatten()
+    .chain(s.buttons.iter().map(|b| b.pin))
+    .collect()
+}
+/// A script name is a plain file name: no directories, no hidden files.
+pub fn valid_script_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+pub fn validate_buttons(buttons: &[GpioButton]) -> Result<()> {
+    if buttons.len() > MAX_BUTTONS {
+        bail!("At most {MAX_BUTTONS} extra buttons");
+    }
+    for b in buttons {
+        if b.hold_ms > MAX_HOLD_MS {
+            bail!("A button can be held for 10 seconds at most");
+        }
+        match (&b.action, &b.script) {
+            (ButtonAction::Script, Some(name)) if valid_script_name(name) => {}
+            (ButtonAction::Script, _) => {
+                bail!("A script button needs a plain file name (letters, digits, - _ .)")
+            }
+            (_, Some(_)) => bail!("Only a script button has a script name"),
+            (_, None) => {}
+        }
+    }
+    Ok(())
+}
+pub fn valid_goggles(mode: &str) -> bool {
+    matches!(mode, "auto" | "goggles3" | "goggles2" | "v1v2")
+}
 pub fn valid_stream_quality(quality: &str) -> bool {
     matches!(quality, "high" | "event")
 }
@@ -235,11 +325,74 @@ pub fn valid_mode(mode: &str) -> bool {
     }
 }
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_mode(path, bytes, 0o644)
+}
+/// Makes an existing secret file (password hash, TLS key) readable by root
+/// only. Files written by releases before 0.3.52 are world-readable. Does
+/// nothing if there is no such file; a failure is not worth stopping for.
+pub fn restrict_to_root(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if path.is_file() {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+}
+/// `atomic_write`, unless the file already holds exactly `bytes`.
+fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
+    if fs::read(path).is_ok_and(|old| old == bytes) {
+        return Ok(());
+    }
+    atomic_write(path, bytes)
+}
+/// Leftovers of an `atomic_write` that never finished (the service was
+/// killed, the disk was full): `<name>.tmp-<pid>` next to the settings and
+/// in the image folder. Only old ones, so another process that is writing
+/// right now keeps its file.
+fn remove_stale_temp_files(dir: &Path) {
+    let old = |e: &fs::DirEntry| {
+        e.metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(60))
+    };
+    for folder in [dir.to_path_buf(), dir.join("images")] {
+        for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let stale = name
+                .rsplit_once(".tmp-")
+                .is_some_and(|(_, pid)| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
+            if stale && entry.path().is_file() && old(&entry) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+/// Like `atomic_write`, for a file that only root may read (password hash,
+/// TLS key). The mode is set on the temporary file before any byte is
+/// written, so the content is never readable by others, not even briefly.
+pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let mut f = fs::File::create(&tmp)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    fs::rename(tmp, path)?;
+    let written = (|| -> Result<()> {
+        let _ = fs::remove_file(&tmp);
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = written {
+        // A full disk must not leave a partial file behind for every attempt.
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     fs::File::open(path.parent().unwrap())?.sync_all()?;
     Ok(())
 }
@@ -264,6 +417,11 @@ pub fn migrate(data_dir: &Path, output: &Path) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
     for (key, value) in object {
         let accepted = match key.as_str() {
+            "goggles" => value
+                .as_str()
+                .filter(|v| valid_goggles(v))
+                .map(|v| next.goggles = v.into())
+                .is_some(),
             "hdmi_mode" => value
                 .as_str()
                 .filter(|v| valid_mode(v))
@@ -319,6 +477,11 @@ pub fn migrate(data_dir: &Path, output: &Path) -> Result<Vec<String>> {
                 .as_bool()
                 .map(|v| next.beep_until_time_synced = v)
                 .is_some(),
+            "buttons" => serde_json::from_value::<Vec<GpioButton>>(value.clone())
+                .ok()
+                .filter(|v| validate_buttons(v).is_ok())
+                .map(|v| next.buttons = v)
+                .is_some(),
             "stream_enabled" => value.as_bool().map(|v| next.stream_enabled = v).is_some(),
             "stream_quality" => value
                 .as_str()
@@ -349,14 +512,7 @@ pub fn migrate(data_dir: &Path, output: &Path) -> Result<Vec<String>> {
     }
     // A migrated file could combine old values into a pin clash the current
     // schema forbids; drop to defaults rather than reject the whole migration.
-    let pins = [
-        next.beeper_pin,
-        next.power_button_pin,
-        next.goggles_led_pin,
-        next.video_led_pin,
-        next.hdmi_led_pin,
-    ];
-    let configured: Vec<u8> = pins.into_iter().flatten().collect();
+    let configured = configured_pins(&next);
     let distinct: std::collections::HashSet<u8> = configured.iter().copied().collect();
     if distinct.len() != configured.len() {
         next.beeper_pin = Settings::default().beeper_pin;
@@ -364,6 +520,7 @@ pub fn migrate(data_dir: &Path, output: &Path) -> Result<Vec<String>> {
         next.goggles_led_pin = Settings::default().goggles_led_pin;
         next.video_led_pin = Settings::default().video_led_pin;
         next.hdmi_led_pin = Settings::default().hdmi_led_pin;
+        next.buttons.clear();
         warnings.push("conflicting GPIO pins; defaults used".into());
     }
     atomic_write(output, &serde_json::to_vec_pretty(&next)?)?;
@@ -490,6 +647,7 @@ mod tests {
         fs::create_dir(f.0.join("images")).unwrap();
         fs::write(f.0.join("images/custom.png"), "image").unwrap();
         let custom = Settings {
+            goggles: "goggles2".into(),
             hdmi_mode: "1920x1080@60".into(),
             hdmi_connector: Some(44),
             fallback_image: Some("custom.png".into()),
@@ -500,6 +658,12 @@ mod tests {
             video_led_pin: Some(21),
             hdmi_led_pin: Some(22),
             beep_until_time_synced: true,
+            buttons: vec![GpioButton {
+                pin: 9,
+                action: ButtonAction::SaveClip,
+                hold_ms: 1000,
+                script: None,
+            }],
             stream_enabled: true,
             stream_quality: "event".into(),
             auto_record: true,
@@ -561,5 +725,280 @@ mod tests {
         assert!(!migrated.preview_enabled);
         assert_eq!(migrated.fallback_image.as_deref(), Some("custom.png"));
         assert_eq!(fs::read(f.0.join("settings.json")).unwrap(), source);
+    }
+
+    fn scratch_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ungoggled-settings-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn built_in_files_are_only_written_when_they_differ() {
+        let dir = scratch_dir("write-if-changed");
+        let file = dir.join("video.h264");
+        write_if_changed(&file, b"first").unwrap();
+        let before = fs::metadata(&file).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        write_if_changed(&file, b"first").unwrap();
+        assert_eq!(fs::metadata(&file).unwrap().modified().unwrap(), before);
+        write_if_changed(&file, b"second").unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"second");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_second_start_leaves_the_built_in_videos_alone() {
+        let dir = scratch_dir("second-start");
+        Store::open(dir.clone()).unwrap();
+        let video = dir.join("images/default-loop.h264");
+        let before = fs::metadata(&video).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        Store::open(dir.clone()).unwrap();
+        assert_eq!(fs::metadata(&video).unwrap().modified().unwrap(), before);
+        // A damaged copy is put back.
+        fs::write(&video, b"damaged").unwrap();
+        Store::open(dir.clone()).unwrap();
+        assert!(fs::read(&video).unwrap().len() > 1000);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_write_leaves_no_temporary_file_and_the_old_content() {
+        let dir = scratch_dir("failed-write");
+        let file = dir.join("settings.json");
+        atomic_write(&file, b"old").unwrap();
+        // A directory in the way of the final name makes the rename fail.
+        let blocked = dir.join("blocked.json");
+        fs::create_dir_all(blocked.join("inside")).unwrap();
+        assert!(atomic_write(&blocked, b"new").is_err());
+        let names: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().all(|n| !n.contains(".tmp-")), "{names:?}");
+        assert_eq!(fs::read(&file).unwrap(), b"old");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn old_temporary_files_of_dead_writes_are_cleaned_up_but_not_fresh_ones() {
+        let dir = scratch_dir("stale");
+        fs::create_dir_all(dir.join("images")).unwrap();
+        let stale = dir.join("images/default-loop.tmp-424242");
+        let fresh = dir.join("settings.tmp-515151");
+        let keep = dir.join("images/not-a-temp-file.tmp-abc");
+        for f in [&stale, &fresh, &keep] {
+            fs::write(f, b"x").unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        remove_stale_temp_files(&dir);
+        assert!(!stale.exists());
+        assert!(fresh.exists(), "might belong to a write in progress");
+        assert!(keep.exists(), "only .tmp-<pid> names are ours");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn button(pin: u8, action: ButtonAction) -> GpioButton {
+        GpioButton {
+            pin,
+            action,
+            hold_ms: 0,
+            script: None,
+        }
+    }
+    fn temp_store(name: &str) -> Store {
+        let dir = std::env::temp_dir().join(format!("ungoggled-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        Store::open(dir).unwrap()
+    }
+
+    #[test]
+    fn buttons_are_saved_and_survive_a_reload() {
+        let store = temp_store("buttons-save");
+        let mut s = store.get();
+        assert!(s.buttons.is_empty(), "none by default");
+        s.buttons = vec![
+            GpioButton {
+                hold_ms: 2000,
+                ..button(5, ButtonAction::Shutdown)
+            },
+            button(7, ButtonAction::SaveClip),
+            GpioButton {
+                script: Some("lights.sh".into()),
+                ..button(12, ButtonAction::Script)
+            },
+        ];
+        store.save(s.clone()).unwrap();
+        assert_eq!(
+            Store::open(store.dir.clone()).unwrap().get().buttons,
+            s.buttons
+        );
+        // The wire format the web interface uses.
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["buttons"][0]["action"], "shutdown");
+        assert_eq!(json["buttons"][1]["action"], "save_clip");
+        assert_eq!(json["buttons"][2]["script"], "lights.sh");
+    }
+
+    #[test]
+    fn button_settings_are_validated() {
+        let store = temp_store("buttons-validate");
+        let with = |buttons: Vec<GpioButton>| Settings {
+            buttons,
+            ..store.get()
+        };
+        // Pin clash with an LED (17), with the power button (19), between two.
+        for clash in [17, 19, 6] {
+            assert!(
+                store
+                    .save(with(vec![button(clash, ButtonAction::Reboot)]))
+                    .is_err()
+            );
+        }
+        assert!(
+            store
+                .save(with(vec![
+                    button(5, ButtonAction::Reboot),
+                    button(5, ButtonAction::SaveClip)
+                ]))
+                .is_err()
+        );
+        assert!(
+            store
+                .save(with(vec![button(28, ButtonAction::Reboot)]))
+                .is_err()
+        );
+        assert!(
+            store
+                .save(with(vec![button(1, ButtonAction::Reboot)]))
+                .is_err()
+        );
+        let many: Vec<_> = (0..5)
+            .map(|i| button(2 + i, ButtonAction::SaveClip))
+            .collect();
+        assert!(store.save(with(many)).is_err(), "at most four");
+        let held_forever = GpioButton {
+            hold_ms: MAX_HOLD_MS + 1,
+            ..button(5, ButtonAction::Shutdown)
+        };
+        assert!(store.save(with(vec![held_forever])).is_err());
+        // Scripts: a plain file name, only for script buttons.
+        for bad in ["", "../x", "a/b", ".hidden", "a b", "x;rm"] {
+            let b = GpioButton {
+                script: Some(bad.into()),
+                ..button(5, ButtonAction::Script)
+            };
+            assert!(store.save(with(vec![b])).is_err(), "{bad:?}");
+        }
+        assert!(
+            store
+                .save(with(vec![button(5, ButtonAction::Script)]))
+                .is_err()
+        );
+        let stray = GpioButton {
+            script: Some("a.sh".into()),
+            ..button(5, ButtonAction::Reboot)
+        };
+        assert!(store.save(with(vec![stray])).is_err());
+        // The file did not change by any of the refused saves.
+        assert!(store.get().buttons.is_empty());
+        assert!(
+            store
+                .save(with(vec![button(5, ButtonAction::Reboot)]))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn an_old_settings_file_without_buttons_still_loads() {
+        let store = temp_store("buttons-old");
+        let mut json = serde_json::to_value(store.get()).unwrap();
+        json.as_object_mut().unwrap().remove("buttons");
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert!(s.buttons.is_empty());
+    }
+
+    #[test]
+    fn migration_keeps_good_buttons_and_drops_conflicting_ones() {
+        let dir =
+            std::env::temp_dir().join(format!("ungoggled-buttons-migrate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("out.json");
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"buttons":[{"pin":5,"action":"shutdown","hold_ms":2000}]}"#,
+        )
+        .unwrap();
+        assert!(migrate(&dir, &out).unwrap().is_empty());
+        let kept: Settings = serde_json::from_slice(&fs::read(&out).unwrap()).unwrap();
+        assert_eq!(kept.buttons.len(), 1);
+        // A pin used twice falls back to the defaults, buttons included.
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"buttons":[{"pin":17,"action":"reboot"}]}"#,
+        )
+        .unwrap();
+        let warnings = migrate(&dir, &out).unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("conflicting")),
+            "{warnings:?}"
+        );
+        let reset: Settings = serde_json::from_slice(&fs::read(&out).unwrap()).unwrap();
+        assert!(reset.buttons.is_empty());
+        // Nonsense is reported, not trusted.
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"buttons":[{"pin":5,"action":"format_disk"}]}"#,
+        )
+        .unwrap();
+        assert!(
+            migrate(&dir, &out)
+                .unwrap()
+                .iter()
+                .any(|w| w.starts_with("buttons:"))
+        );
+    }
+
+    #[test]
+    fn the_goggles_type_is_validated_saved_and_defaults_to_automatic() {
+        let store = temp_store("goggles-type");
+        assert_eq!(store.get().goggles, "auto");
+        for ok in ["goggles3", "goggles2", "v1v2", "auto"] {
+            let s = Settings {
+                goggles: ok.into(),
+                ..store.get()
+            };
+            assert!(store.save(s).is_ok(), "{ok}");
+            assert_eq!(Store::open(store.dir.clone()).unwrap().get().goggles, ok);
+        }
+        for bad in ["", "Goggles3", "goggles 2", "v1", "auto\n", "o4"] {
+            let s = Settings {
+                goggles: bad.into(),
+                ..store.get()
+            };
+            assert!(store.save(s).is_err(), "{bad:?}");
+        }
+        assert_eq!(store.get().goggles, "auto", "refused saves change nothing");
+        // An old settings file without the field is automatic.
+        let mut json = serde_json::to_value(store.get()).unwrap();
+        json.as_object_mut().unwrap().remove("goggles");
+        let old: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(old.goggles, "auto");
     }
 }

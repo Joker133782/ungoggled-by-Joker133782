@@ -2,6 +2,7 @@ mod api;
 mod assets;
 mod auth;
 mod clock;
+mod diag;
 mod display;
 mod functionfs;
 mod g2;
@@ -20,6 +21,7 @@ mod storage;
 mod stream;
 mod support;
 mod system_fixes;
+mod system_password;
 mod terminal;
 mod tls;
 mod update;
@@ -209,8 +211,13 @@ struct App {
     /// Gates every control-plane route; `/watch.html` and `/api/stream.ts`
     /// deliberately stay outside it so spectators never need a login.
     auth: auth::Store,
+    /// The TLS listener is on, so the session cookie can be marked `Secure`
+    /// (the browser then never sends it over plain HTTP).
+    secure_cookie: bool,
     /// Step-up tickets and the single open terminal (`terminal.rs`).
     terminals: terminal::Terminals,
+    /// Remembers what the log already said (`diag.rs`).
+    diag: Arc<Mutex<diag::Watcher>>,
 }
 
 #[tokio::main]
@@ -317,8 +324,24 @@ async fn main() -> Result<()> {
                 network_notice: Arc::new(Mutex::new(None)),
                 stream: stream::Controller::default(),
                 auth,
+                secure_cookie: !tls_listen.is_empty(),
                 terminals: terminal::Terminals::default(),
+                diag: Arc::default(),
             };
+            eprintln!(
+                "ungoggled {} ({}) started: kernel {} goggles={} transport={} control_port={} accessory_pid=0x{:04x} decoder={} output={}",
+                env!("CARGO_PKG_VERSION"),
+                update::running_build().unwrap_or_default(),
+                std::fs::read_to_string("/proc/sys/kernel/osrelease")
+                    .unwrap_or_default()
+                    .trim(),
+                worker.goggles,
+                worker.transport,
+                worker.control_port,
+                worker.accessory_pid,
+                worker.decoder,
+                worker.output,
+            );
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             let observed = app.clone();
             let report: video::Report = Arc::new(move |event| observed.event(event));
@@ -380,23 +403,39 @@ async fn main() -> Result<()> {
                 }
             });
             let hardware_status = app.clone();
+            let hardware_buttons = app.clone();
             let hardware = hardware::start(
                 Arc::new(move || hardware_status.snapshot()),
                 app.settings.clone(),
                 app.shutdown.clone(),
                 app.beeper_test.clone(),
                 report,
+                Arc::new(move |button| hardware_buttons.run_button(button)),
             );
             let samples = app.clone();
             let sampler = tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(1));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut resources = metrics::Sampler::default();
+                let mut beat = diag::Heartbeat::default();
+                let mut throttled: Option<u32> = None;
+                let mut throttled_at: Option<Instant> = None;
                 while !samples.shutdown.load(Ordering::Relaxed) {
                     interval.tick().await;
                     let s = samples.snapshot();
                     let m = resources.sample();
                     samples.history.lock().unwrap().push(&s, &m);
+                    if throttled_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(30)) {
+                        throttled_at = Some(Instant::now());
+                        throttled = tokio::task::spawn_blocking(diag::read_throttled)
+                            .await
+                            .ok()
+                            .flatten()
+                            .or(throttled);
+                    }
+                    for line in beat.observe(&s, throttled, Instant::now()) {
+                        eprintln!("{line}");
+                    }
                 }
             });
             let router = api::router(app.clone(), web_dir);
@@ -495,17 +534,77 @@ fn redirect_router(https_port: u16) -> axum::Router {
         .with_state(https_port)
 }
 impl App {
+    /// What a GPIO button is set to do. Called on its own thread; the text
+    /// that comes back is written to the log.
+    fn run_button(&self, button: &settings::GpioButton) -> Result<String, String> {
+        use settings::ButtonAction::*;
+        let why = |e: anyhow::Error| format!("{e:#}");
+        let power = |verb: &str| -> Result<String, String> {
+            // Not in the middle of installing an update.
+            update::api::ensure_idle().map_err(why)?;
+            Command::new("systemctl")
+                .arg(verb)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            Ok(format!("systemctl {verb}"))
+        };
+        match button.action {
+            Shutdown => power("poweroff"),
+            Reboot => power("reboot"),
+            SaveClip => {
+                let saved = self
+                    .recording
+                    .save_buffer(&api::recordings_dir(self))
+                    .map_err(why)?;
+                Ok(format!(
+                    "saved {}",
+                    saved["name"].as_str().unwrap_or("a clip")
+                ))
+            }
+            ToggleRecording => {
+                if self.recording.status()["recording"].as_bool() == Some(true) {
+                    self.recording.stop();
+                    Ok("recording stopped".into())
+                } else {
+                    let started = self
+                        .recording
+                        .start(&api::recordings_dir(self))
+                        .map_err(why)?;
+                    *self.disk_warning.lock().unwrap() = None;
+                    Ok(format!(
+                        "recording started: {}",
+                        started["name"].as_str().unwrap_or("")
+                    ))
+                }
+            }
+            RestartReceiver => {
+                update::api::ensure_idle().map_err(why)?;
+                self.enabled.store(true, Ordering::Relaxed);
+                self.restart.fetch_add(1, Ordering::Relaxed);
+                Ok("receiver restarted".into())
+            }
+            Script => {
+                let name = button.script.as_deref().unwrap_or_default();
+                hardware::run_script(&self.settings.dir, name)
+            }
+        }
+    }
     fn event(&self, event: Value) {
         if let Value::Object(event) = event {
             if event.contains_key("output_frames") {
                 *self.last_output.lock().unwrap() = Some(Instant::now());
             }
-            self.status
-                .lock()
-                .unwrap()
-                .as_object_mut()
-                .unwrap()
-                .extend(event);
+            let mut status = self.status.lock().unwrap();
+            let lines = self.diag.lock().unwrap().changes(
+                status.as_object().unwrap(),
+                &event,
+                Instant::now(),
+            );
+            status.as_object_mut().unwrap().extend(event);
+            drop(status);
+            for line in lines {
+                eprintln!("{line}");
+            }
         }
     }
     fn snapshot(&self) -> Value {
@@ -570,6 +669,13 @@ async fn restart(State(app): State<App>, headers: HeaderMap) -> Result<Json<Valu
     Ok(Json(json!({"accepted":true})))
 }
 
+/// The goggles type the receiver starts with: the choice made in the web
+/// interface, unless that says "auto", then the system-wide value
+/// (`UNGOGGLED_GOGGLES` in `/etc/default/dji-hdmi`, itself `auto` by default).
+fn goggles_mode(setting: &str, system: &str) -> String {
+    if setting == "auto" { system } else { setting }.to_owned()
+}
+
 fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !app.shutdown.load(Ordering::Relaxed) {
@@ -578,6 +684,7 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                 continue;
             }
             let generation = app.restart.load(Ordering::Relaxed);
+            let mode = goggles_mode(&app.settings.get().goggles, &args.goggles);
             let mut cmd = Command::new(std::env::current_exe().unwrap());
             cmd.args([
                 "worker",
@@ -594,7 +701,7 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                 "--accessory-pid",
                 &args.accessory_pid.to_string(),
                 "--goggles",
-                &args.goggles,
+                &mode,
             ]);
             cmd.arg("--goggles-memory").arg(&args.goggles_memory);
             cmd.arg("--video-socket").arg(&args.video_socket);
@@ -626,19 +733,25 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                     Ok(())
                 });
             }
-            app.event(json!({"phase":"starting","video_bytes":0,"bitrate_mbps":0}));
+            app.event(json!({
+                "phase":"starting","video_bytes":0,"bitrate_mbps":0,"goggles_mode":mode
+            }));
             match cmd.spawn() {
                 Ok(mut child) => {
-                    let state = app.status.clone();
-                    let last_output = app.last_output.clone();
+                    eprintln!(
+                        "Receiver worker started (pid {}): goggles={} transport={}",
+                        child.id(),
+                        mode,
+                        args.transport
+                    );
+                    let observed = app.clone();
                     let stdout = child.stdout.take().unwrap();
                     let reader = thread::spawn(move || {
                         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                            if let Ok(Value::Object(event)) = serde_json::from_str::<Value>(&line) {
-                                if event.contains_key("output_frames") {
-                                    *last_output.lock().unwrap() = Some(Instant::now());
-                                }
-                                state.lock().unwrap().as_object_mut().unwrap().extend(event);
+                            if let Ok(event @ Value::Object(_)) =
+                                serde_json::from_str::<Value>(&line)
+                            {
+                                observed.event(event);
                             }
                         }
                     });
@@ -651,6 +764,7 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                         }
                         match child.try_wait() {
                             Ok(Some(s)) => {
+                                eprintln!("Receiver worker exited: {s}");
                                 app.status.lock().unwrap()["message"] =
                                     json!(format!("Receiver exited: {s}"));
                                 break;
@@ -671,6 +785,7 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                     let _ = reader.join();
                 }
                 Err(e) => {
+                    eprintln!("Cannot start the receiver worker: {e}");
                     app.status.lock().unwrap()["message"] = json!(e.to_string());
                 }
             }
@@ -761,4 +876,23 @@ fn doctor() -> Value {
             })
         }).collect();
     json!({"controllers":controllers,"connectors":connectors,"gadgetfs_mounted":std::fs::read_to_string("/proc/mounts").unwrap_or_default().contains(" gadgetfs "),"functionfs_mounted":std::fs::read_to_string("/proc/mounts").unwrap_or_default().contains(" functionfs "),"architecture":std::env::consts::ARCH})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::goggles_mode;
+
+    #[test]
+    fn a_fixed_choice_in_the_web_interface_wins_over_the_system_value() {
+        assert_eq!(goggles_mode("goggles2", "auto"), "goggles2");
+        assert_eq!(goggles_mode("goggles3", "goggles2"), "goggles3");
+        assert_eq!(goggles_mode("v1v2", "auto"), "v1v2");
+    }
+
+    #[test]
+    fn automatic_in_the_web_interface_leaves_the_system_value_in_charge() {
+        // `UNGOGGLED_GOGGLES` in /etc/default/dji-hdmi keeps working after the update.
+        assert_eq!(goggles_mode("auto", "goggles2"), "goggles2");
+        assert_eq!(goggles_mode("auto", "auto"), "auto");
+    }
 }

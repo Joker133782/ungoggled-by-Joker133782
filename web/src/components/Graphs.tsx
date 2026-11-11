@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type PointerEvent } from "react";
 import type { History, Sample } from "../types";
-import { api } from "../api";
+import { api, withTimeout } from "../api";
 import { agoLabel, number } from "../format";
 import { GRAPH_GROUPS, useGraphGroups, type GraphGroup } from "../graph-groups";
 import { PanelHead } from "./PanelHead";
@@ -150,13 +150,12 @@ function useHistory(): Buffer | null {
     let timer: ReturnType<typeof setTimeout>;
     let held: Buffer | null = null;
     const poll = async () => {
+      const request = withTimeout(abort.signal, 8000);
       try {
-        const since = held?.samples.at(-1)?.t;
+        const since = held?.samples[held.samples.length - 1]?.t;
         const h = await api<History>(
           since == null ? "history" : `history?since=${since}`,
-          {
-            signal: AbortSignal.any([abort.signal, AbortSignal.timeout(8000)]),
-          },
+          { signal: request.signal },
         );
         if (abort.signal.aborted) return;
         if (held && h.instance !== held.instance) {
@@ -177,6 +176,8 @@ function useHistory(): Buffer | null {
         setBuffer(held);
       } catch {
         /* The next poll retries. */
+      } finally {
+        request.done();
       }
       if (!abort.signal.aborted) timer = setTimeout(poll, POLL_MS);
     };
@@ -211,7 +212,7 @@ function outageSpans(samples: Sample[]): [number, number][] {
   const spans: [number, number][] = [];
   for (const s of samples) {
     if (s.hdmi !== "fallback" && s.phase === "streaming") continue;
-    const last = spans.at(-1);
+    const last = spans[spans.length - 1];
     if (last && s.t - last[1] <= 1.5) last[1] = s.t + 1;
     else spans.push([s.t, s.t + 1]);
   }
@@ -240,7 +241,7 @@ export function Graphs() {
   const samples = useMemo(() => history?.samples ?? [], [history]);
   const now = history?.now ?? 0;
   const begin = now - SPAN;
-  const latest = samples.at(-1) ?? null;
+  const latest = samples[samples.length - 1] ?? null;
   const at = hover == null ? latest : nearest(samples, hover);
   const outages = useMemo(() => outageSpans(samples), [samples]);
   const shown = GRAPH_GROUPS.filter((g) => groups[g.id]);

@@ -49,7 +49,7 @@ export function IdleScreen({
   settings: Settings | null;
   status: Status | null;
   disabled: boolean;
-  onSave: (next: Settings) => Promise<void>;
+  onSave: (patch: Partial<Settings>) => Promise<void>;
   onLibraryChange: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -76,7 +76,7 @@ export function IdleScreen({
   }
   function choose(id: string | null) {
     if (!settings) return;
-    void task(id ?? "dark", () => onSave({ ...settings, fallback_image: id }));
+    void task(id ?? "dark", () => onSave({ fallback_image: id }));
   }
   function upload(file: File) {
     if (!settings) return;
@@ -89,15 +89,14 @@ export function IdleScreen({
         body: data,
       });
       await onLibraryChange();
-      await onSave({ ...settings, fallback_image: uploaded.id });
+      await onSave({ fallback_image: uploaded.id });
     });
   }
   function remove(entry: ImageEntry) {
     if (!settings) return;
     void task(`delete:${entry.id}`, async () => {
       // The Pi refuses to delete the idle screen in use; switch away first.
-      if (selected === entry.id)
-        await onSave({ ...settings, fallback_image: DEFAULT_ID });
+      if (selected === entry.id) await onSave({ fallback_image: DEFAULT_ID });
       await api(`images/${entry.id}`, { method: "DELETE", headers });
       await onLibraryChange();
     }).then(() => setDeleting(null));
@@ -180,10 +179,7 @@ export function IdleScreen({
         </p>
       )}
       <p className="help">
-        Images: PNG, JPEG or WebP, up to 12 MiB, shown whole (never cropped).
-        Videos: MP4 with H.264 (not HEVC), up to 1920×1080 and 64 MiB, played in
-        an endless loop; converting one takes a few seconds. An upload becomes
-        the idle screen straight away.
+        Image: PNG, JPEG, WebP, 12 MiB. Video: H.264 MP4, 1080p, 64 MiB, looped.
       </p>
       <ConfirmDialog
         open={deleting !== null}

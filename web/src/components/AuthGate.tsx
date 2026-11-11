@@ -87,9 +87,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
         <h2>{firstRun ? "Set a control password" : "Log in"}</h2>
         {firstRun && (
           <p className="help">
-            Anyone with this password can control the receiver, change settings
-            and reach your recordings. The spectator stream page doesn't need it
-            and won't ask for it.
+            Also the Pi&apos;s SSH/root password. The spectator page needs no
+            login.
           </p>
         )}
         <div className="auth-fields">

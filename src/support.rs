@@ -1,4 +1,5 @@
-//! A downloadable diagnostics bundle: recent service logs, the update
+//! A downloadable diagnostics bundle: the service log of the last 30 days (it
+//! survives reboots, see `scripts/prepare-pi.sh`), the kernel log, the update
 //! history, hardware diagnostics and the current settings/status, all in one
 //! `.tar.gz` — so a problem can be reported, even from a phone, without SSH
 //! access to the Pi.
@@ -64,12 +65,50 @@ pub fn build(settings: &Value, status: &Value) -> Result<Vec<u8>> {
         "releases.json",
         serde_json::to_string_pretty(&releases)?.as_bytes(),
     )?;
+    // The whole retained service log (30 days, across reboots), not just the
+    // last boot; the cap keeps the bundle small enough for a phone.
     add(
         &mut archive,
         "journal-dji-hdmi.log",
         run(
             "journalctl",
-            &["-u", "dji-hdmi", "-n", "2000", "--no-pager"],
+            &[
+                "-u",
+                "dji-hdmi",
+                "-n",
+                "30000",
+                "--no-pager",
+                "-o",
+                "short-iso",
+            ],
+        )
+        .as_bytes(),
+    )?;
+    // USB controller events, under-voltage, SD card errors: what the kernel saw,
+    // across the retained boots.
+    add(
+        &mut archive,
+        "journal-kernel.log",
+        run(
+            "journalctl",
+            &[
+                "_TRANSPORT=kernel",
+                "-n",
+                "6000",
+                "--no-pager",
+                "-o",
+                "short-iso",
+            ],
+        )
+        .as_bytes(),
+    )?;
+    add(
+        &mut archive,
+        "journal-boots.txt",
+        format!(
+            "{}\n{}",
+            run("journalctl", &["--list-boots", "--no-pager"]),
+            run("journalctl", &["--disk-usage"])
         )
         .as_bytes(),
     )?;
@@ -82,12 +121,29 @@ pub fn build(settings: &Value, status: &Value) -> Result<Vec<u8>> {
         )
         .as_bytes(),
     )?;
+    // Which protocol the goggles were remembered with, and what the USB
+    // controller says right now.
+    add(
+        &mut archive,
+        "goggles.txt",
+        format!(
+            "goggles-protocol.json:\n{}\n\nUSB controller state:\n{}\n",
+            std::fs::read_to_string("/var/lib/dji-hdmi/goggles-protocol.json")
+                .unwrap_or_else(|e| format!("not available: {e}")),
+            run("sh", &["-c", "cat /sys/class/udc/*/state 2>&1"]),
+        )
+        .as_bytes(),
+    )?;
     let system_info = format!(
-        "uname -a:\n{}\n\ndf -h:\n{}\n\nfree -h:\n{}\n\nvcgencmd measure_temp:\n{}\n",
+        "uname -a:\n{}\n\ndate / uptime:\n{}{}\n\ndf -h:\n{}\n\nfree -h:\n{}\n\n\
+         vcgencmd measure_temp:\n{}\n\nvcgencmd get_throttled:\n{}\n",
         run("uname", &["-a"]),
+        run("date", &[]),
+        run("uptime", &[]),
         run("df", &["-h"]),
         run("free", &["-h"]),
         run("vcgencmd", &["measure_temp"]),
+        run("vcgencmd", &["get_throttled"]),
     );
     add(&mut archive, "system-info.txt", system_info.as_bytes())?;
     Ok(archive.into_inner()?.finish()?)
@@ -114,10 +170,33 @@ mod tests {
             "diagnostics.json",
             "releases.json",
             "journal-dji-hdmi.log",
+            "journal-kernel.log",
+            "journal-boots.txt",
             "journal-update-recovery.log",
+            "goggles.txt",
             "system-info.txt",
         ] {
             assert!(names.contains(&expected.to_owned()), "missing {expected}");
         }
+    }
+
+    /// The same journal limits are written by `prepare-pi.sh` (older installs
+    /// and every start) and `provision-image.sh` (fresh images).
+    #[test]
+    fn both_scripts_set_the_same_thirty_day_journal_limits() {
+        let prepare = include_str!("../scripts/prepare-pi.sh");
+        let provision = include_str!("../scripts/provision-image.sh");
+        let keys = [
+            "Storage=persistent",
+            "SystemMaxUse=100M",
+            "SystemMaxFileSize=8M",
+            "MaxFileSec=1day",
+            "MaxRetentionSec=30day",
+        ];
+        for key in keys {
+            assert!(prepare.contains(key), "prepare-pi.sh lacks {key}");
+            assert!(provision.contains(key), "provision-image.sh lacks {key}");
+        }
+        assert!(!provision.contains("Storage=volatile"));
     }
 }

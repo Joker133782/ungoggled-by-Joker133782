@@ -286,7 +286,9 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs, aoa: V
             let mut captured = 0u64;
             let video = video::Output::connect(&args.video_socket);
             let mut controls = 0u64;
+            let mut control_log = crate::diag::ControlLog::default();
             let mut clock_ack = false;
+            let mut clock_rejected = false;
             let mut last_log = Instant::now();
             loop {
                 let n = match input.read(&mut buffer) {
@@ -313,7 +315,7 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs, aoa: V
                             captured += n as u64;
                         }
                         video.send(payload);
-                    } else if port == protocol::CONTROL || port == 0x5749 {
+                    } else if port == protocol::CONTROL || port == args.control_port {
                         controls += 1;
                         if protocol::valid(&payload) {
                             if protocol::is_time_sync(&payload) {
@@ -323,19 +325,13 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs, aoa: V
                                         eprintln!("air unit clock set");
                                         clock_ack = true;
                                     }
-                                } else {
+                                } else if !clock_rejected {
+                                    // Sent every few seconds: once is enough.
+                                    clock_rejected = true;
                                     eprintln!("air unit clock rejected payload={body:02x?}");
                                 }
-                            } else if controls < 30 {
-                                eprintln!(
-                                    "DUML {:02x}->{:02x} {:02x}:{:02x} flags={:02x} payload={:02x?}",
-                                    payload[4],
-                                    payload[5],
-                                    payload[9],
-                                    payload[10],
-                                    payload[8],
-                                    &payload[11..payload.len() - 2]
-                                );
+                            } else if let Some(line) = control_log.first_of_kind(port, &payload) {
+                                eprintln!("{line}");
                             }
                             if let Some(reply) = protocol::identity_reply(&payload) {
                                 // Goggles 2 expect replies on 0x7530; Goggles 3 on

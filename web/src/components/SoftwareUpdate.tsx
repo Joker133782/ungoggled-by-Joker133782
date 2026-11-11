@@ -350,8 +350,7 @@ export function SoftwareUpdate({
           )}
         </div>
         <p className="help">
-          Choose the release’s .update.tar.gz file, or drag and drop it here.
-          Video pauses during installation; compatible settings are retained.
+          Choose or drop the .update.tar.gz. Video pauses while installing.
         </p>
       </div>
       {state?.phase === "ready" && (
@@ -391,10 +390,8 @@ export function SoftwareUpdate({
       {canRetryWithoutHealthCheck && (
         <div className="update-skip-health-check">
           <p className="help">
-            If the new version actually looked fine on the HDMI screen before
-            this reverted it, the health check itself may be wrong rather than
-            the update — this has happened before. Skipping it keeps the new
-            version without that automatic verification.
+            The health check can be wrong. Skipping keeps the new version
+            unchecked.
           </p>
           <button disabled={busy} onClick={() => void install(true)}>
             <IconCheck /> Retry v{state?.version} without the health check

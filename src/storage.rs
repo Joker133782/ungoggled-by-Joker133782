@@ -13,13 +13,27 @@ use std::{
     process::Command,
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "m4v", "insv", "lrv"];
 /// Keep scans fast and bounded even on a card full of unrelated files.
 const MAX_FILES: usize = 4000;
 const MAX_DEPTH: usize = 6;
+/// The only filesystems a plugged-in drive is mounted as (tried in this
+/// order). Cameras and cards use FAT/exFAT, Windows-formatted drives NTFS.
+/// Anything else (ext4, btrfs, xfs, f2fs, ...) is never handed to the kernel:
+/// a crafted image on a stranger's stick would otherwise be parsed by that
+/// filesystem's driver as soon as it is plugged in, and such filesystems can
+/// also carry symlinks that would redirect recordings and downloads to files
+/// on the SD card.
+const MOUNT_TYPES: &str = "vfat,exfat,ntfs3";
+/// A drive that could not be mounted (no partition table entry for the whole
+/// disk node, an unsupported filesystem, a damaged card) is tried again only
+/// this often, instead of every poll.
+const MOUNT_RETRY: Duration = Duration::from_secs(30);
+/// `mount` talks to the drive; a dying one can make it hang.
+const MOUNT_TIMEOUT: &str = "30";
 
 #[derive(Clone)]
 struct Mounted {
@@ -282,102 +296,166 @@ pub fn start(
     let watched = store.mounted.clone();
     thread::spawn(move || {
         use std::sync::atomic::Ordering;
+        let mut failed = HashMap::new();
         while !shutdown.load(Ordering::Relaxed) {
-            reconcile(&base, &watched, settings.get().record_to_usb);
+            reconcile(&base, &watched, settings.get().record_to_usb, &mut failed);
             thread::sleep(Duration::from_secs(2));
         }
-        for drive in watched.lock().unwrap().drain(..) {
+        let drives: Vec<Mounted> = watched.lock().unwrap().drain(..).collect();
+        for drive in drives {
             unmount(&drive, false);
         }
     });
     store
 }
 
-fn reconcile(base: &Path, mounted: &Arc<Mutex<Vec<Mounted>>>, read_write: bool) {
+/// One pass over the plugged-in drives: unmount what was pulled out or must
+/// change mode, mount what is new. The list of mounted drives is locked only
+/// to read and update it, never across `mount`/`umount`: the render loop asks
+/// it for the recording folder on every pass while `record_to_usb` is on, and
+/// a slow drive must not be able to stall the live picture.
+/// `failed` remembers when each drive last failed to mount (see `MOUNT_RETRY`).
+fn reconcile(
+    base: &Path,
+    mounted: &Arc<Mutex<Vec<Mounted>>>,
+    read_write: bool,
+    failed: &mut HashMap<String, Instant>,
+) {
     let excluded = root_devices();
     let present: Vec<String> = removable_block_devices()
         .into_iter()
         .filter(|d| !excluded.contains(d))
         .collect();
-    let mut guard = mounted.lock().unwrap();
-    guard.retain(|m| {
-        if !present.contains(&m.device) {
-            unmount(m, true);
-            false
-        } else if m.read_write != read_write {
-            // record_to_usb changed since this drive was mounted: drop it so
-            // the loop below mounts it fresh in the now-desired mode.
-            unmount(m, false);
-            false
-        } else {
-            true
+    // Decide under the lock, act without it.
+    let mut stale: Vec<(Mounted, bool)> = Vec::new();
+    {
+        let mut guard = mounted.lock().unwrap();
+        let mut keep = Vec::with_capacity(guard.len());
+        for m in guard.drain(..) {
+            if !present.contains(&m.device) {
+                stale.push((m, true));
+            } else if m.read_write != read_write {
+                // record_to_usb changed since this drive was mounted: take it
+                // out of use and mount it again in the wanted mode.
+                stale.push((m, false));
+            } else {
+                keep.push(m);
+            }
         }
-    });
+        *guard = keep;
+    }
+    for (m, device_gone) in stale {
+        if !unmount(&m, device_gone) {
+            // Still in use (a clip is playing from it, a recording is open):
+            // it stays mounted in the mode it really has, and is tried again
+            // on the next pass. Forgetting it would let the code below adopt
+            // it as if it had already been remounted in the new mode.
+            mounted.lock().unwrap().push(m);
+        }
+    }
+    failed.retain(|device, _| present.contains(device));
+    let known: Vec<String> = mounted
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|m| m.device.clone())
+        .collect();
     for device in present {
-        if guard.iter().any(|m| m.device == device) {
+        if known.contains(&device) {
             continue;
         }
-        let mountpoint = base.join(&device);
         // Already mounted from a previous run that did not unmount cleanly
         // (an unclean shutdown, e.g.): adopt it rather than trying to mount
         // over it, which would just fail and leave the device untracked. Its
-        // actual mode is unknown; assume it matches what's currently wanted
-        // rather than forcing an unnecessary remount on every boot.
-        if let Some(existing) = existing_mountpoint(&device) {
-            guard.push(Mounted {
+        // real mode is read from the mount table, so a drive that is still
+        // read-only is not treated as writable; a mode other than the wanted
+        // one is corrected on a later pass.
+        if let Some((existing, rw)) = existing_mount(&device) {
+            mounted.lock().unwrap().push(Mounted {
                 device,
                 mountpoint: existing,
-                read_write,
+                read_write: rw,
             });
             continue;
         }
+        if failed
+            .get(&device)
+            .is_some_and(|t| t.elapsed() < MOUNT_RETRY)
+        {
+            continue;
+        }
+        let mountpoint = base.join(&device);
         if fs::create_dir_all(&mountpoint).is_err() {
             continue;
         }
-        let opts = if read_write {
-            "rw,noexec,nosuid,nodev"
-        } else {
-            "ro,noexec,nosuid,nodev"
-        };
-        let ok = Command::new("mount")
-            .args(["-o", opts])
-            .arg("--")
-            .arg(format!("/dev/{device}"))
-            .arg(&mountpoint)
+        let ok = Command::new("timeout")
+            .args(mount_args(&device, &mountpoint, read_write))
             .output()
             .is_ok_and(|o| o.status.success());
         if ok {
-            guard.push(Mounted {
+            failed.remove(&device);
+            mounted.lock().unwrap().push(Mounted {
                 device,
                 mountpoint,
                 read_write,
             });
         } else {
+            failed.insert(device, Instant::now());
             let _ = fs::remove_dir(&mountpoint);
         }
     }
 }
-/// Where `/dev/<device>` is already mounted, per the kernel's own mount
-/// table, if anywhere.
-fn existing_mountpoint(device: &str) -> Option<PathBuf> {
-    let target = format!("/dev/{device}");
-    fs::read_to_string("/proc/mounts")
-        .ok()?
-        .lines()
-        .find_map(|l| {
-            let mut parts = l.split_whitespace();
-            if parts.next()? != target {
-                return None;
-            }
-            parts.next().map(PathBuf::from)
-        })
+/// The command line (after `timeout`) that mounts `device` at `mountpoint`,
+/// read-write only when recordings are to be written there.
+fn mount_args(device: &str, mountpoint: &Path, read_write: bool) -> Vec<std::ffi::OsString> {
+    let opts = if read_write {
+        "rw,noexec,nosuid,nodev"
+    } else {
+        "ro,noexec,nosuid,nodev"
+    };
+    [
+        MOUNT_TIMEOUT,
+        "mount",
+        "-t",
+        MOUNT_TYPES,
+        "-o",
+        opts,
+        "--",
+        &format!("/dev/{device}"),
+    ]
+    .into_iter()
+    .map(std::ffi::OsString::from)
+    .chain([mountpoint.as_os_str().to_owned()])
+    .collect()
 }
-/// `device_gone`: the drive is no longer plugged in.
-fn unmount(m: &Mounted, device_gone: bool) {
+/// Where `/dev/<device>` is already mounted and whether read-write, per the
+/// kernel's own mount table, if anywhere.
+fn existing_mount(device: &str) -> Option<(PathBuf, bool)> {
+    parse_mount(
+        &fs::read_to_string("/proc/mounts").ok()?,
+        &format!("/dev/{device}"),
+    )
+}
+fn parse_mount(table: &str, target: &str) -> Option<(PathBuf, bool)> {
+    table.lines().find_map(|l| {
+        let mut parts = l.split_whitespace();
+        if parts.next()? != target {
+            return None;
+        }
+        let mountpoint = parts.next().map(PathBuf::from)?;
+        let _fstype = parts.next()?;
+        let read_write = parts.next()?.split(',').any(|o| o == "rw");
+        Some((mountpoint, read_write))
+    })
+}
+/// Unmounts the drive. `device_gone`: it is no longer plugged in. `false`
+/// means it is still mounted (busy) and must be kept in the list.
+fn unmount(m: &Mounted, device_gone: bool) -> bool {
     let plain = Command::new("umount")
         .arg(&m.mountpoint)
         .output()
         .is_ok_and(|o| o.status.success());
+    let mut done = plain;
     if !plain && device_gone {
         // Busy: the drive was pulled out while a clip was playing from it,
         // and mpv still holds the file open. A plain umount then fails for
@@ -387,8 +465,12 @@ fn unmount(m: &Mounted, device_gone: bool) {
         // drive that is really gone: one that is still there (remounted for
         // another mode) must stay reachable for what is playing from it.
         let _ = Command::new("umount").arg("-l").arg(&m.mountpoint).output();
+        done = true;
     }
-    let _ = fs::remove_dir(&m.mountpoint);
+    if done {
+        let _ = fs::remove_dir(&m.mountpoint);
+    }
+    done
 }
 
 /// Block device names (e.g. "sda1") that are removable and not loop/dm/md.
@@ -620,5 +702,78 @@ mod tests {
         }
 
         fs::remove_dir_all(&thumb_dir).unwrap();
+    }
+
+    fn args_as_text(read_write: bool) -> Vec<String> {
+        mount_args(
+            "sda1",
+            Path::new("/run/dji-hdmi/usb-media/sda1"),
+            read_write,
+        )
+        .into_iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
+    }
+
+    #[test]
+    fn drives_are_only_ever_mounted_as_fat_exfat_or_ntfs() {
+        let args = args_as_text(false);
+        let t = args.iter().position(|a| a == "-t").expect("a -t option");
+        assert_eq!(args[t + 1], "vfat,exfat,ntfs3");
+        for risky in ["ext", "btrfs", "xfs", "f2fs", "auto"] {
+            assert!(
+                !args.iter().any(|a| a.contains(risky)),
+                "{risky} must not be offered"
+            );
+        }
+    }
+
+    #[test]
+    fn the_mount_is_bounded_in_time_and_cannot_be_mistaken_for_an_option() {
+        let args = args_as_text(false);
+        assert_eq!(&args[..2], ["30", "mount"], "run under timeout");
+        let dashes = args.iter().position(|a| a == "--").unwrap();
+        assert_eq!(args[dashes + 1], "/dev/sda1");
+        assert_eq!(args[dashes + 2], "/run/dji-hdmi/usb-media/sda1");
+        assert_eq!(args.len(), dashes + 3);
+    }
+
+    #[test]
+    fn read_only_unless_recordings_go_to_the_drive() {
+        let ro = args_as_text(false);
+        let rw = args_as_text(true);
+        let opts = |a: &[String]| a[a.iter().position(|x| x == "-o").unwrap() + 1].clone();
+        assert_eq!(opts(&ro), "ro,noexec,nosuid,nodev");
+        assert_eq!(opts(&rw), "rw,noexec,nosuid,nodev");
+    }
+
+    #[test]
+    fn the_real_mode_of_an_existing_mount_is_read_from_the_mount_table() {
+        let table = [
+            "/dev/mmcblk0p2 / ext4 rw,noatime 0 0",
+            "/dev/sda1 /run/dji-hdmi/usb-media/sda1 exfat ro,nosuid,nodev,noexec 0 0",
+            "/dev/sdb1 /run/dji-hdmi/usb-media/sdb1 vfat rw,nosuid,nodev,noexec 0 0",
+            "/dev/sdc1 /mnt/rwx vfat ro,errors=remount-ro 0 0",
+        ]
+        .join("\n");
+        assert_eq!(
+            parse_mount(&table, "/dev/sda1"),
+            Some((PathBuf::from("/run/dji-hdmi/usb-media/sda1"), false))
+        );
+        assert_eq!(
+            parse_mount(&table, "/dev/sdb1"),
+            Some((PathBuf::from("/run/dji-hdmi/usb-media/sdb1"), true))
+        );
+        assert_eq!(
+            parse_mount(&table, "/dev/sdc1"),
+            Some((PathBuf::from("/mnt/rwx"), false)),
+            "an option merely containing 'rw' text is not read-write"
+        );
+        assert_eq!(parse_mount(&table, "/dev/sdd1"), None);
+        assert_eq!(
+            parse_mount(&table, "/dev/sda"),
+            None,
+            "a prefix of the name is not the device"
+        );
     }
 }

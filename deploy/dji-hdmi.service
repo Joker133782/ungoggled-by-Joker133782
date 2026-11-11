@@ -14,7 +14,8 @@ ExecStart=/opt/dji-hdmi/current/bin/ungoggled serve --listen 0.0.0.0:80 --web-di
 Restart=on-failure
 RestartSec=3
 KillMode=control-group
-TimeoutStopSec=5
+TimeoutStopSec=30
+LimitNOFILE=8192
 StandardOutput=journal
 StandardError=journal
 

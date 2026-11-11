@@ -24,6 +24,8 @@ pub async fn ensure(dir: &Path) -> Result<RustlsConfig> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let cert_path = dir.join("tls-cert.pem");
     let key_path = dir.join("tls-key.pem");
+    // Keys written by earlier releases are world-readable; only root needs it.
+    crate::settings::restrict_to_root(&key_path);
     let (cert_pem, key_pem) = match (fs::read(&cert_path), fs::read(&key_path)) {
         (Ok(cert_pem), Ok(key_pem)) => (cert_pem, key_pem),
         _ => {
@@ -38,7 +40,7 @@ pub async fn ensure(dir: &Path) -> Result<RustlsConfig> {
             let cert_pem = cert.pem().into_bytes();
             let key_pem = key_pair.serialize_pem().into_bytes();
             crate::settings::atomic_write(&cert_path, &cert_pem)?;
-            crate::settings::atomic_write(&key_path, &key_pem)?;
+            crate::settings::atomic_write_mode(&key_path, &key_pem, 0o600)?;
             (cert_pem, key_pem)
         }
     };
@@ -70,6 +72,15 @@ mod tests {
         // A second call must not regenerate (and thus replace) the pair.
         ensure(&dir).await.unwrap();
         assert_eq!(fs::read(dir.join("tls-cert.pem")).unwrap(), cert);
+        assert_eq!(fs::read(dir.join("tls-key.pem")).unwrap(), key);
+        // The key is private, and a world-readable one from an older release
+        // is tightened (not regenerated) on the next start.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |name: &str| fs::metadata(dir.join(name)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode("tls-key.pem"), 0o600);
+        fs::set_permissions(dir.join("tls-key.pem"), fs::Permissions::from_mode(0o644)).unwrap();
+        ensure(&dir).await.unwrap();
+        assert_eq!(mode("tls-key.pem"), 0o600);
         assert_eq!(fs::read(dir.join("tls-key.pem")).unwrap(), key);
         fs::remove_dir_all(&dir).unwrap();
     }

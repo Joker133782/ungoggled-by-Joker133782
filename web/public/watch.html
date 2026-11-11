@@ -18,12 +18,13 @@
   <p>Connecting…</p>
   <p><button id="retry">Tap to play</button></p>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.2/dist/mpegts.js"></script>
+<script src="/mpegts.js"></script>
 <script>
 const video = document.getElementById('video');
 const message = document.getElementById('message');
 const retry = document.getElementById('retry');
 let player = null;
+let retryTimer = null;
 
 function setMessage(text) {
   message.classList.remove('hidden');
@@ -34,6 +35,10 @@ function hideMessage() {
 }
 
 function start() {
+  if (typeof mpegts === 'undefined') {
+    setMessage('Player could not be loaded.');
+    return;
+  }
   if (!mpegts.getFeatureList().mseLivePlayback) {
     setMessage('This browser cannot play a live stream here. Try Chrome or Safari.');
     return;
@@ -48,7 +53,8 @@ function start() {
   );
   player.on(mpegts.Events.ERROR, () => {
     setMessage('Stream unavailable. It may be turned off, or the receiver is restarting.');
-    setTimeout(start, 4000);
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(start, 4000);
   });
   player.on(mpegts.Events.MEDIA_INFO, hideMessage);
   player.attachMediaElement(video);
@@ -57,6 +63,7 @@ function start() {
 }
 retry.addEventListener('click', () => {
   setMessage('Connecting…');
+  clearTimeout(retryTimer);
   video.play().catch(() => {});
   start();
 });

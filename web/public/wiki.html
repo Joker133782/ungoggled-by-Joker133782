@@ -1,625 +1,1307 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="no-js">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c0f14" />
+    <meta name="color-scheme" content="dark" />
     <title>ungoggled – help</title>
-    <style>
-      :root {
-        --accent: #4fd1c5;
-        --bg: #0c0f14;
-        --panel: #11151d;
-        --panel-raised: #151a22;
-        --border: #1f2733;
-        --text: #e6ebf2;
-        --text-dim: #9aa3b2;
-        --text-faint: #6b7585;
-      }
-      html,
-      body {
-        margin: 0;
-        padding: 0;
-        background: var(--bg);
-        color: var(--text);
-        font-family: Inter, system-ui, sans-serif;
-      }
-      a {
-        color: var(--accent);
-        text-decoration: none;
-      }
-      a:hover {
-        text-decoration: underline;
-      }
-      .layout {
-        display: flex;
-        flex-wrap: wrap;
-        min-height: 100vh;
-      }
-      nav {
-        width: 240px;
-        flex: 0 0 240px;
-        border-right: 1px solid var(--border);
-        padding: 24px 16px;
-        box-sizing: border-box;
-        position: sticky;
-        top: 0;
-        align-self: flex-start;
-        max-height: 100vh;
-        overflow-y: auto;
-      }
-      nav .back {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--text-dim);
-        font-size: 13px;
-        margin-bottom: 18px;
-      }
-      nav .label {
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: var(--text-faint);
-        padding: 6px 10px;
-        display: block;
-      }
-      nav a.item {
-        display: block;
-        padding: 8px 10px;
-        border-radius: 8px;
-        font-size: 13.5px;
-        font-weight: 500;
-        color: var(--text-dim);
-      }
-      nav a.item:hover {
-        background: var(--panel-raised);
-        text-decoration: none;
-        color: var(--text);
-      }
-      nav a.item:target,
-      nav a.item.current {
-        background: var(--panel-raised);
-        color: var(--text);
-      }
-      main {
-        flex: 999 1 560px;
-        min-width: 0;
-        padding: 36px 48px 80px;
-        box-sizing: border-box;
-        max-width: 720px;
-      }
-      article {
-        margin-bottom: 56px;
-        scroll-margin-top: 24px;
-      }
-      h1 {
-        font-size: 24px;
-        margin: 0 0 6px;
-      }
-      .sub {
-        color: var(--text-faint);
-        font-size: 13.5px;
-        margin: 0 0 24px;
-      }
-      h3 {
-        font-size: 15px;
-        margin: 24px 0 8px;
-      }
-      p {
-        font-size: 14.5px;
-        line-height: 1.7;
-        color: #c3c9d4;
-      }
-      code {
-        font-family: ui-monospace, monospace;
-        background: var(--panel-raised);
-        padding: 1px 6px;
-        border-radius: 4px;
-      }
-      @media (max-width: 760px) {
-        nav {
-          position: static;
-          width: 100%;
-          flex: 1 1 100%;
-          max-height: none;
-          border-right: none;
-          border-bottom: 1px solid var(--border);
-        }
-        main {
-          padding: 24px 20px 60px;
-        }
-      }
-    </style>
+    <meta name="description" content="Help for the ungoggled receiver: setup, settings, wiring and troubleshooting." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="wiki/wiki.css" />
+    <script>document.documentElement.className = "js";</script>
+    <script src="wiki/wiki.js" defer></script>
   </head>
   <body>
+    <a class="skip" href="#content">Skip to the help text</a>
+
+    <!-- Icon sprite (stroke icons in currentColor, same family as the console) -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+      <symbol id="i-goggles" viewBox="0 0 64 64"><path d="M19 30H45A11 11 0 0 1 45 52H38.5L35.6 47.2A4 4 0 0 0 28.4 47.2L25.5 52H19A11 11 0 0 1 19 30Z" stroke-width="3.4" stroke-linejoin="round"/><circle cx="22.5" cy="41" r="4" fill="currentColor" stroke="none"/><circle cx="41.5" cy="41" r="4" fill="currentColor" stroke="none"/><path d="M24 24A11 11 0 0 1 40 24" stroke-width="3.4" stroke-linecap="round"/><path d="M19 18A18 18 0 0 1 45 18" stroke-width="3.4" stroke-linecap="round" opacity=".55"/></symbol>
+      <symbol id="i-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="1.7"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-stream" viewBox="0 0 24 24"><path d="M3 8.5a13 13 0 0 1 18 0M6 12a8.5 8.5 0 0 1 12 0M9.3 15.4a4 4 0 0 1 5.4 0" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="18.5" r="1.3" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-usb" viewBox="0 0 24 24"><rect x="3" y="7" width="14" height="11" rx="2.5" stroke-width="1.7"/><path d="M17 10.5l4-2.2v9.4l-4-2.2" stroke-width="1.7" stroke-linejoin="round"/><circle cx="10" cy="12.5" r="2.4" stroke-width="1.5"/></symbol>
+      <symbol id="i-preview" viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z" stroke-width="1.7"/><circle cx="12" cy="12" r="3" stroke-width="1.7"/></symbol>
+      <symbol id="i-hdmi" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="13" rx="2" stroke-width="1.7"/><path d="M9 21h6" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="1.7"/><path d="M12 7v5l3.5 2" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8.5a15 15 0 0 1 20 0M5.5 12a10 10 0 0 1 13 0M9 15.5a5 5 0 0 1 6 0" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-update" viewBox="0 0 24 24"><path d="M12 20V5M6 10l6-6 6 6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" stroke-width="1.7"/><circle cx="9" cy="10" r="1.8" stroke-width="1.5"/><path d="M4.5 17.5L9.5 13L13 16L17 12L19.5 14.5" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+      <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" stroke-width="1.7"/><path d="M9 2.5V6M15 2.5V6M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 4v16h16" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.5 15l3.5-4 3 2.5 5-6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.5" stroke-width="1.7"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5" stroke-width="1.7"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5M12 14.5v2" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M17.4 7H20M4 17h2.6M11 17h9" stroke-width="1.7" stroke-linecap="round"/><circle cx="15.2" cy="7" r="2.2" stroke-width="1.7"/><circle cx="8.8" cy="17" r="2.2" stroke-width="1.7"/></symbol>
+      <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3.5V11" stroke-width="1.9" stroke-linecap="round"/><path d="M7 5.8A8 8 0 1 0 17 5.8" stroke-width="1.9" stroke-linecap="round"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 7" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24"><path d="M12 3.5c-2.8 0-5 2.2-5 5v3.3c0 .9-.4 1.7-1 2.4l-.5.6h13l-.5-.6a3.5 3.5 0 0 1-1-2.4V8.5c0-2.8-2.2-5-5-5Z" stroke-width="1.7" stroke-linejoin="round"/><path d="M9.5 18.5a2.5 2.5 0 0 0 5 0" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7M6 7l1 13a1.5 1.5 0 0 0 1.5 1.5h7a1.5 1.5 0 0 0 1.5-1.5L18 7" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4.5v15l14-7.5-14-7.5Z" fill="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+      <symbol id="i-clip" viewBox="0 0 24 24"><path d="M7 3.5h10a1 1 0 0 1 1 1V21l-6-4-6 4V4.5a1 1 0 0 1 1-1Z" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+      <symbol id="i-reconnect" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66" stroke-width="1.8" stroke-linecap="round"/><path d="M17 3v4h-4M7 21v-4h4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" stroke-width="1.9"/><path d="M15.5 15.5L20.5 20.5" stroke-width="1.9" stroke-linecap="round"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" stroke-width="1.9" stroke-linecap="round"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke-width="1.9" stroke-linecap="round"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.5 6.5" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-tip" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.1V16h5v-.1c0-.8.4-1.6 1.1-2.1A6 6 0 0 0 12 3Z" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-note" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="1.7"/><path d="M12 11v5.5" stroke-width="1.9" stroke-linecap="round"/><circle cx="12" cy="7.8" r="1.2" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.5L2.8 19.5h18.4L12 3.5Z" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 10v4.5" stroke-width="1.9" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-example" viewBox="0 0 24 24"><path d="M9.5 3h5M10.5 3v6.5L5.3 18.4A1.8 1.8 0 0 0 6.9 21h10.2a1.8 1.8 0 0 0 1.6-2.6L13.5 9.5V3M7.5 15h9" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0V8ZM12 16v5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5" stroke-width="1.7"/><path d="M11 18.5h2" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 5A2 2 0 0 1 7 3h12v14H7a2 2 0 0 0-2 2V5Z" stroke-width="1.7" stroke-linejoin="round"/><path d="M5 19a2 2 0 0 0 2 2h12v-4" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+      <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="1.7"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.4c-.6.3-1 .8-1 1.5v.5" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="16.8" r="1.1" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-log" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11" stroke-width="1.7" stroke-linecap="round"/><circle cx="4.8" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="4.8" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4.8" cy="18" r="1.3" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-pins" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2.5" stroke-width="1.7"/><circle cx="7" cy="9.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="9.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="17" cy="9.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="7" cy="14.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="14.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="17" cy="14.5" r="1.3" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-button" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke-width="1.7"/><circle cx="12" cy="12" r="4" stroke-width="1.7"/></symbol>
+      <symbol id="i-fan" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="1.7"/><path id="i-fan-blade" d="M12 12c-1.2-2.6-.8-5.3 1.4-5.6 1.8-.2 2.4 2.2.6 4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 12c-1.2-2.6-.8-5.3 1.4-5.6 1.8-.2 2.4 2.2.6 4" transform="rotate(120 12 12)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 12c-1.2-2.6-.8-5.3 1.4-5.6 1.8-.2 2.4 2.2.6 4" transform="rotate(240 12 12)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5" stroke-width="1.7"/><path d="M6.5 10h1M10.5 10h1M14.5 10h1M8 14h8" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-network" viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="2.5" stroke-width="1.7"/><circle cx="5.5" cy="18.5" r="2.5" stroke-width="1.7"/><circle cx="18.5" cy="18.5" r="2.5" stroke-width="1.7"/><path d="M12 8v4M12 12l-5 4.5M12 12l5 4.5" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    </svg>
+
+    <!-- Decorative radio-wave background, as in the web console -->
+    <svg class="site-background" viewBox="0 0 1600 1000" preserveAspectRatio="xMaxYMin slice" fill="none" aria-hidden="true" focusable="false">
+      <defs>
+        <pattern id="ug-dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="12" cy="12" r="1" fill="#8a93a3"/></pattern>
+        <radialGradient id="ug-fade" cx="1470" cy="70" r="1100" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".55" stop-color="#fff" stop-opacity=".25"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+        <mask id="ug-mask"><rect width="1600" height="1000" fill="url(#ug-fade)"/></mask>
+        <radialGradient id="ug-glow" cx="1470" cy="70" r="520" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#4fd1c5" stop-opacity=".1"/><stop offset="1" stop-color="#4fd1c5" stop-opacity="0"/></radialGradient>
+        <radialGradient id="ug-glow-mid" cx="1250" cy="480" r="380" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#4fd1c5" stop-opacity=".09"/><stop offset="1" stop-color="#4fd1c5" stop-opacity="0"/></radialGradient>
+      </defs>
+      <rect width="1600" height="1000" fill="url(#ug-dots)" opacity=".16" mask="url(#ug-mask)"/>
+      <rect width="1600" height="1000" fill="url(#ug-glow)"/>
+      <rect width="1600" height="1000" fill="url(#ug-glow-mid)"/>
+      <g stroke="#4fd1c5" stroke-width="1">
+        <circle cx="1470" cy="70" r="110" stroke-opacity=".172"/><circle cx="1470" cy="70" r="192" stroke-opacity=".158"/><circle cx="1470" cy="70" r="274" stroke-opacity=".145"/><circle cx="1470" cy="70" r="356" stroke-opacity=".132" stroke-dasharray="2 7"/><circle cx="1470" cy="70" r="438" stroke-opacity=".119"/><circle cx="1470" cy="70" r="520" stroke-opacity=".107"/><circle cx="1470" cy="70" r="602" stroke-opacity=".095"/><circle cx="1470" cy="70" r="684" stroke-opacity=".083" stroke-dasharray="2 7"/><circle cx="1470" cy="70" r="766" stroke-opacity=".073"/><circle cx="1470" cy="70" r="848" stroke-opacity=".062"/><circle cx="1470" cy="70" r="930" stroke-opacity=".053"/><circle cx="1470" cy="70" r="1012" stroke-opacity=".043" stroke-dasharray="2 7"/><circle cx="1470" cy="70" r="1094" stroke-opacity=".035"/><circle cx="1470" cy="70" r="1176" stroke-opacity=".027"/><circle cx="1470" cy="70" r="1258" stroke-opacity=".021"/>
+        <circle cx="1250" cy="480" r="70" stroke-opacity=".15"/><circle cx="1250" cy="480" r="130" stroke-opacity=".13"/><circle cx="1250" cy="480" r="190" stroke-opacity=".11" stroke-dasharray="2 7"/><circle cx="1250" cy="480" r="250" stroke-opacity=".09"/><circle cx="1250" cy="480" r="310" stroke-opacity=".07"/><circle cx="1250" cy="480" r="370" stroke-opacity=".05" stroke-dasharray="2 7"/>
+        <circle cx="60" cy="1040" r="90" stroke-opacity=".08"/><circle cx="60" cy="1040" r="160" stroke-opacity=".068"/><circle cx="60" cy="1040" r="230" stroke-opacity=".057"/><circle cx="60" cy="1040" r="300" stroke-opacity=".045"/><circle cx="60" cy="1040" r="370" stroke-opacity=".033"/>
+      </g>
+    </svg>
+
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Open the list of topics">
+        <svg class="icon"><use href="#i-menu"/></svg>
+      </button>
+      <a class="brand" href="#start" aria-label="ungoggled help, start page">
+        <span class="logo" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none" stroke="currentColor"><use href="#i-goggles"/></svg></span>
+        <span class="wordmark"><span class="un">un</span>goggled</span>
+        <span class="brand-tag">Help</span>
+      </a>
+      <span class="topbar-spacer"></span>
+      <button class="search-trigger" type="button" data-open-search aria-label="Search the help (shortcut: slash or Ctrl+K)">
+        <svg class="icon"><use href="#i-search"/></svg>
+        <span class="label">Search help…</span>
+        <span class="hint" aria-hidden="true"><kbd>/</kbd><kbd>Ctrl K</kbd></span>
+      </button>
+      <a class="back-link" href="/" aria-label="Back to the console">
+        <svg class="icon"><use href="#i-back"/></svg><span class="label-long">Console</span>
+      </a>
+    </header>
+
+    <div class="backdrop" id="backdrop" aria-hidden="true"></div>
+
     <div class="layout">
-      <nav aria-label="Help topics">
-        <a class="back" href="/">&larr; Back to the interface</a>
-        <span class="label">Help</span>
-        <a class="item" href="#preview">Preview &amp; receiver</a>
-        <a class="item" href="#hdmi">HDMI &amp; idle screen</a>
-        <a class="item" href="#recording">Recording</a>
-        <a class="item" href="#stream">Spectator stream</a>
-        <a class="item" href="#usb">USB – ActionCam video player</a>
-        <a class="item" href="#wifi">Wi-Fi access point</a>
-        <a class="item" href="#hardware">Beeper, LEDs &amp; power button</a>
-        <a class="item" href="#system">System &amp; clock</a>
-        <a class="item" href="#graphs">Graphs (last 30 minutes)</a>
-        <a class="item" href="#terminal">Terminal</a>
-        <a class="item" href="#password">Control password</a>
-        <a class="item" href="#updates">Software updates</a>
-        <a class="item" href="#install">Installing as an app</a>
-      </nav>
-      <main>
-        <article id="preview">
-          <h1>Preview &amp; receiver</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            The big box on the main page is a small, low-frame-rate copy of
-            what's going out over HDMI, so you can check everything looks right
-            without a monitor plugged in. It is not the HDMI picture itself —
-            turning it off saves a little bandwidth but never touches the actual
-            output.
-          </p>
-          <h3>Start / Stop receiver</h3>
-          <p>
-            Stops listening to the goggles entirely. Mostly useful for
-            troubleshooting; normally just leave it running.
-          </p>
-          <h3>Reconnect goggles</h3>
-          <p>
-            Forces a fresh handshake with the goggles without restarting the
-            whole receiver — try this first if the picture gets stuck.
-          </p>
-        </article>
-
-        <article id="hdmi">
-          <h1>HDMI &amp; idle screen</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            Controls what the connected screen shows. "Output mode" picks the
-            resolution; Automatic is right for almost everyone. The Pi has two
-            micro-HDMI ports; either one works on its own. If you ever plug in
-            two screens at once, "Output port" picks which one gets the
-            picture.
-          </p>
-          <p>
-            Automatic always uses 1080p (up to 60 Hz). If your screen can do
-            4K at 60 Hz it is listed too, but that works only on the port next
-            to the USB-C power input and needs a high-speed (HDMI 2.0) cable.
-            If the picture turns black after choosing a 4K mode, choose
-            Automatic again, and restart the Pi if the picture does not come
-            back.
-          </p>
-          <h3>Stretch to fill the screen</h3>
-          <p>
-            Normally a picture is shown in its own shape, so a 4:3 picture
-            (many action cameras, or the goggles in 4:3 mode) has black bars at
-            the sides of a 16:9 screen. Switch on "Stretch the live picture"
-            and/or "Stretch USB videos" to pull it over the whole screen
-            instead. Round things then look slightly oval. Both are off by
-            default. The speed is the same either way. The Pi's display chip
-            cannot stretch every picture size of the live feed; it then shows
-            that picture as it arrives, after a brief flicker when the picture
-            starts.
-          </p>
-          <h3>Idle screen</h3>
-          <p>
-            What the screen shows while there's no live picture — before the
-            goggles connect, or if the signal drops. Pick one from the list:
-            the built-in logo loops and "No signal" picture, a plain dark
-            screen, or your own photo, logo or short looping video (up to
-            1920×1080, H.264, 64 MiB).
-          </p>
-          <p>
-            The button next to each one says what tapping it does. "Play"
-            appears while the idle screen is what's on the TV: the TV switches
-            to it right away. "Use" appears while live video is showing: it
-            becomes the next idle screen without interrupting the picture.
-          </p>
-          <p>
-            The built-in ones are always there and can't be deleted. Room for
-            your own: 3 videos and 16 pictures — the built-ins don't count
-            towards that.
-          </p>
-        </article>
-
-        <article id="recording">
-          <h1>Recording</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            Saves the live goggles picture to the SD card, exactly as it arrives
-            — no quality loss. If the goggles' own on-screen display (battery,
-            channel, signal bars) is turned on, it's part of the picture; that's
-            set on the goggles or in DJI Fly, not here.
-          </p>
-          <h3>Auto-record every flight</h3>
-          <p>
-            Switch it on and forget it. Every time you fly, a recording starts
-            by itself and is saved the moment the signal ends — nothing to
-            press. Keeps the 5 most recent flights; the oldest is replaced
-            automatically.
-          </p>
-          <h3>Crash buffer (last 30 seconds)</h3>
-          <p>
-            Like the instant-replay on the DJI goggles themselves. This runs in
-            the background all the time once switched on, and the moment the
-            signal drops — say, in a crash — it automatically saves the last 30
-            seconds on its own. Keeps the 3 most recent clips. The "save last 30
-            seconds now" button below works independently, any time you want to
-            grab a moment without losing the signal first.
-          </p>
-          <h3>Start recording / Save last 30 seconds now</h3>
-          <p>
-            Manual alternatives for when you want full control: start and stop a
-            recording yourself, or grab whatever happened in roughly the last
-            half-minute right now.
-          </p>
-          <h3>Where do recordings go?</h3>
-          <p>
-            By default, the SD card — downloadable, deletable or playable
-            straight on the connected screen from this page. If the card gets
-            too full, recording stops on its own and you'll see a warning.
-            Switch on "Record to USB drive instead of SD card" and plug a USB
-            stick or drive into one of the regular USB-A ports to save
-            recordings there instead — handy for longer sessions, or to pull
-            footage straight off the drive afterwards. If the drive isn't
-            plugged in, recordings fall back to the SD card automatically.
-          </p>
-        </article>
-
-        <article id="stream">
-          <h1>Spectator stream</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            Lets people standing around watch the live feed on their own phone,
-            over the Pi's own Wi-Fi — no extra app, just a browser. This is
-            completely separate from the low-latency link you actually fly with;
-            turning it on or off never affects your flight.
-          </p>
-          <h3>Which quality should I pick?</h3>
-          <p>
-            <strong>High quality</strong> — best picture, but realistically only
-            for one or two people watching at once.<br /><br /><strong
-              >Low quality</strong
-            >
-            — a bit softer and smaller, but supports noticeably more viewers at
-            the same time. Only one of the two runs at a time; switching one on
-            turns the other off. The Pi's Wi-Fi radio is the real limit here,
-            and it's shared with everyone watching plus the web interface
-            itself.
-          </p>
-          <h3>How do spectators watch?</h3>
-          <p>
-            Two steps on their phone: first join the Pi's Wi-Fi, then open
-            <code>/watch.html</code> in any browser. Nothing to install. "Show
-            QR codes for spectators" puts both steps on your screen as two
-            codes to scan, one after the other — one joins the Wi-Fi (it has
-            the current network name and password in it), the other opens the
-            stream page. Their phone may say the Wi-Fi has no internet; that's
-            expected. The first time, their browser also warns that the
-            connection isn't private, because the Pi makes its own certificate:
-            tapping "Advanced", then "Proceed", gets past it.
-          </p>
-        </article>
-
-        <article id="usb">
-          <h1>USB – ActionCam video player</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            Plug an action camera or a USB stick with videos into one of the
-            Pi's regular USB-A ports (not the port the goggles use). Its video
-            files show up in a list here, and you can play one straight on the
-            connected screen — handy for watching footage together without a
-            laptop.
-          </p>
-          <h3>How smoothly is it playing?</h3>
-          <p>
-            While a clip plays, a line under the time bar shows how many
-            pictures per second really reach the screen and how fast the clip
-            runs compared with real time (1.00× is real time). Very large
-            action-camera clips can be more than the Pi can decode in real
-            time; they then play in smooth slow motion, and this line tells you
-            how slow. The same number appears in the HDMI output box and in the
-            "TV" line of the frame-rate graph.
-          </p>
-          <h3>Does it work with my camera?</h3>
-          <p>
-            Most common action cameras and formats work, but it hasn't been
-            tested against every model. If a video doesn't show up or doesn't
-            play cleanly, that's a known risk of this still-experimental
-            feature.
-          </p>
-        </article>
-
-        <article id="wifi">
-          <h1>Wi-Fi access point</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            The Pi broadcasts its own Wi-Fi network so you can reach this web
-            interface, and so spectators can join the stream — it doesn't need
-            your home or venue Wi-Fi at all. Change the name and password here;
-            changes apply right away, so reconnect your own device afterwards
-            too.
-          </p>
-          <h3>Joining an existing network instead</h3>
-          <p>
-            Further down, you can have the Pi join a Wi-Fi network you already
-            have — scan for one nearby or type its name, enter the password and
-            join. This switches off the Pi's own hotspot for as long as it's
-            connected there, so reconnect your own device to that same network
-            too; look for the Pi at <code>ungoggled.local</code>, or read its
-            current address straight off the HDMI screen. If the join doesn't
-            work out, the Pi gives up after about 30 seconds and goes back to
-            broadcasting its own hotspot on its own — no reboot needed. The
-            "always broadcast the access point after a reboot" switch decides
-            what happens the next time the Pi is turned on: left on, it always
-            comes back up as its own hotspot; switched off, it tries to rejoin
-            the network it was last connected to instead — useful for a Pi
-            that stays put as a stationary review station, rather than one
-            that gets taken flying.
-          </p>
-        </article>
-
-        <article id="hardware">
-          <h1>Beeper, LEDs &amp; power button</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            If you've wired up optional extras — a beeper, status LEDs or a
-            physical power button — this is where you tell the Pi which pins
-            they're connected to, or turn each one off if you don't have it.
-          </p>
-        </article>
-
-        <article id="system">
-          <h1>System &amp; clock</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            The Pi has no battery-backed clock, so it doesn't know the real time
-            after a power cut — opening this page sets it from your browser
-            automatically. From here you can also reboot or shut the Pi down
-            safely.
-          </p>
-          <h3 id="reboot-pending">"Restart the Pi once to finish the last update"</h3>
-          <p>
-            Some updates also improve how the Pi itself starts up — for
-            example keeping the video chip fast enough for large action-cam
-            clips. Those parts only switch on the next time the Pi starts.
-            Until then everything works exactly as before, so there's no rush:
-            restart it when it suits you (never mid-flight) with "Reboot Pi"
-            here, or it simply happens the next time you power the Pi up for
-            your next session. The message goes away once the Pi is back up.
-          </p>
-          <h3>Download diagnostics</h3>
-          <p>
-            Having a problem? This button gathers recent logs, the update
-            history and hardware info into one file you can download — even
-            on your phone — and send along when asking for help. Nothing is
-            uploaded anywhere on its own; it's just a download.
-          </p>
-        </article>
-
-        <article id="graphs">
-          <h1>Graphs (last 30 minutes)</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            Small graphs of the last half hour, grouped: Video (bitrate and
-            frame rate), Pi health (temperature, processor and memory),
-            Network (Wi-Fi and Ethernet traffic) and SD card. Touch or hover
-            any graph to read the values at that moment from all of them at
-            once; "Back to now" returns to the latest values. Shaded stretches
-            had no live picture.
-          </p>
-          <p>
-            Values past a warning level turn amber and are spelled out at the
-            top: the Pi at 75 °C or hotter, the processor or memory at 90 % or
-            more, and the Wi-Fi sending 40 Mbps or more (close to what the Pi's
-            radio can carry, which mostly matters with spectators watching).
-          </p>
-          <p>
-            Settings → Graphs switches whole groups on or off. That choice is
-            remembered on each phone or computer separately. The history lives
-            in the Pi's memory only, so it starts empty after a restart.
-          </p>
-        </article>
-
-        <article id="terminal">
-          <h1>Terminal</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            A command line on the Pi, right in the browser — for
-            troubleshooting together with someone who knows Linux, without
-            needing SSH. It runs as the Pi's administrator (root), so a wrong
-            command can break the installation: if you don't know what a
-            command does, don't run it.
-          </p>
-          <h3>Switching it on</h3>
-          <p>
-            It's off until you switch it on in Settings → Terminal. Switching
-            it off again closes an open terminal immediately.
-          </p>
-          <h3>Safety limits</h3>
-          <p>
-            Every time you open it, it asks for the control password again,
-            even though you're already logged in; wrong guesses count towards
-            the same lock-out as the login page. Only one terminal can be open
-            at a time. It closes on its own after 10 minutes without typing,
-            after 30 minutes at most, and when you log out; on most phones
-            also a minute after you switch away from it. Anything still
-            running in it is stopped when it closes.
-          </p>
-          <h3>On a phone</h3>
-          <p>
-            The row of keys under the terminal adds what a phone keyboard
-            lacks: Esc, Tab, Ctrl (tap it, then the letter), the arrow keys and
-            a few symbols; A− and A+ change the text size. The buttons above
-            them run a few harmless look-up commands, like the service log or
-            free disk space.
-          </p>
-        </article>
-
-        <article id="password">
-          <h1>Control password</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            Everything on this page — settings, recordings, Wi-Fi, updates,
-            rebooting the Pi — needs a password now, so anyone on the Wi-Fi
-            can't change things just by finding this address. The first time
-            anyone opens this page, it asks you to set one; after that,
-            logging in keeps you signed in on that browser.
-          </p>
-          <p>
-            The spectator stream page (<code>/watch.html</code>) is the one
-            exception on purpose — it never asks for this password, so you
-            can hand that link to anyone without handing them control too.
-          </p>
-          <p>
-            Forgot the password? There's no reset button in the interface —
-            ask whoever manages the Pi to delete <code>auth.json</code> from
-            its data directory (<code>/var/lib/dji-hdmi/</code> on the
-            standard image) over SSH and restart the service; the next visit
-            asks for a new password as if it were the first time.
-          </p>
-        </article>
-
-        <article id="updates">
-          <h1>Software updates</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            The line at the top of this section says whether your phone can
-            reach the update server right now: green means it can, amber means
-            it can't (often because the phone is on the Pi's Wi-Fi without
-            mobile data) — then upload an update file instead. It's checked
-            automatically when you open the System tab.
-          </p>
-          <p>
-            Check for a new version right from this page, and see what's new
-            before downloading anything. The download itself uses your phone's
-            own mobile data, not the Pi's connection — so it works even out in
-            the field. Once downloaded, install it right away or leave it ready
-            to install later; either way, if something goes wrong on first
-            start, it automatically switches back to the version that was
-            working before, so you're never left with a broken device.
-          </p>
-          <h3>An update rolled back and offers to skip the health check</h3>
-          <p>
-            After installing, the new version has to prove itself on the HDMI
-            screen before it's kept; if it doesn't, the previous version comes
-            back automatically — nothing stays broken. Occasionally that check
-            itself is wrong even though the new version actually looked fine,
-            which has happened before. When a rollback happens for exactly
-            that reason, a "Retry without the health check" button appears
-            right there, letting you install it again without that automatic
-            check. It's only offered for that specific situation — never for
-            a corrupt download or a real problem.
-          </p>
-          <h3>What's new so far</h3>
+      <nav class="sidebar" id="sidebar" aria-label="Help topics">
+        <div class="nav-head">
+          <span>Topics</span>
+          <button class="icon-btn" id="nav-close" type="button" aria-label="Close the list of topics"><svg class="icon"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="nav-group">
+          <h2>Start</h2>
           <ul>
-            <li>WebUI Rework — a cleaner, more modern look throughout</li>
-            <li>
-              Recording, with an automatic "save every flight" option and a
-              crash buffer like the goggles' own instant-replay
-            </li>
-            <li>
-              Spectator stream (experimental) — bystanders can watch the live
-              feed on their own phone
-            </li>
-            <li>
-              USB — ActionCam Video Player (experimental) — browse and play
-              videos from a USB drive or action camera on the screen
-            </li>
-            <li>
-              Wi-Fi: join an existing network instead of only broadcasting the
-              Pi's own, with an automatic fallback back to its own network if
-              the join doesn't work out
-            </li>
-            <li>Goggles 2 support (experimental)</li>
-            <li>Original DJI FPV Goggles (V1/V2) support (experimental)</li>
-            <li>
-              A loopable fallback video or image while waiting for the goggles'
-              signal
-            </li>
-            <li>
-              HTTPS, so the web interface can be installed as a real fullscreen
-              app on a phone
-            </li>
-            <li>
-              New logo, background and three selectable waiting-screen videos
-              for the HDMI output, plus an icon on every button
-            </li>
-            <li>This help wiki</li>
-            <li>
-              A password on the control interface, and a "retry without the
-              health check" option if an update ever rolls back for the
-              wrong reason
-            </li>
-            <li>
-              USB video player: shows how smoothly a clip plays, and big
-              action-camera clips (like the DJI Action 2 in 4K) no longer turn
-              the picture black
-            </li>
-            <li>
-              Switches to stretch the live picture and USB videos to fill the
-              whole screen (Settings → HDMI)
-            </li>
-            <li>
-              The picture comes back by itself after the monitor was switched
-              off and on again
-            </li>
-            <li>
-              Pulling out the action camera while a clip plays now stops the
-              player by itself and brings the idle screen back
-            </li>
-            <li>
-              4K at 60 Hz on the first HDMI port (the one next to the USB-C
-              port), and a little smoother playback of big clips; needs one
-              restart after the update
-            </li>
-            <li>
-              A fan on GPIO 14 now switches on from 60 &deg;C by itself (also
-              after that restart)
-            </li>
+            <li><a href="#start"><svg class="icon"><use href="#i-goggles"/></svg>What ungoggled does</a></li>
+            <li><a href="#connect"><svg class="icon"><use href="#i-plug"/></svg>Connect &amp; first start</a></li>
+            <li><a href="#install"><svg class="icon"><use href="#i-phone"/></svg>Install as an app</a></li>
           </ul>
-        </article>
+        </div>
+        <div class="nav-group">
+          <h2>Using it</h2>
+          <ul>
+            <li><a href="#preview"><svg class="icon"><use href="#i-preview"/></svg>Preview &amp; receiver</a></li>
+            <li><a href="#goggles"><svg class="icon"><use href="#i-goggles"/></svg>Goggles</a></li>
+            <li><a href="#hdmi"><svg class="icon"><use href="#i-hdmi"/></svg>HDMI &amp; idle screen</a></li>
+            <li><a href="#recording"><svg class="icon"><use href="#i-record"/></svg>Recording</a></li>
+            <li><a href="#usb"><svg class="icon"><use href="#i-usb"/></svg>USB video player</a></li>
+            <li><a href="#stream"><svg class="icon"><use href="#i-stream"/></svg>Spectator stream</a></li>
+          </ul>
+        </div>
+        <div class="nav-group">
+          <h2>Hardware &amp; wiring</h2>
+          <ul>
+            <li><a href="#hardware"><svg class="icon"><use href="#i-chip"/></svg>Beeper, LEDs &amp; buttons</a></li>
+            <li><a href="#gpio-pinout"><svg class="icon"><use href="#i-pins"/></svg>Pi 4B pinout</a></li>
+            <li><a href="#wiring"><svg class="icon"><use href="#i-plug"/></svg>Wiring examples</a></li>
+            <li><a href="#extra-buttons"><svg class="icon"><use href="#i-button"/></svg>Extra buttons</a></li>
+            <li><a href="#power-button"><svg class="icon"><use href="#i-power"/></svg>Power button (GPIO 3)</a></li>
+            <li><a href="#fan"><svg class="icon"><use href="#i-fan"/></svg>Fan</a></li>
+          </ul>
+        </div>
+        <div class="nav-group">
+          <h2>Network &amp; access</h2>
+          <ul>
+            <li><a href="#wifi"><svg class="icon"><use href="#i-wifi"/></svg>Wi-Fi</a></li>
+            <li><a href="#password"><svg class="icon"><use href="#i-lock"/></svg>Password</a></li>
+          </ul>
+        </div>
+        <div class="nav-group">
+          <h2>System &amp; upkeep</h2>
+          <ul>
+            <li><a href="#system"><svg class="icon"><use href="#i-clock"/></svg>System &amp; clock</a></li>
+            <li><a href="#graphs"><svg class="icon"><use href="#i-chart"/></svg>Graphs (last 30 minutes)</a></li>
+            <li><a href="#terminal"><svg class="icon"><use href="#i-terminal"/></svg>Terminal</a></li>
+            <li><a href="#updates"><svg class="icon"><use href="#i-update"/></svg>Software updates</a></li>
+            <li><a href="#log"><svg class="icon"><use href="#i-log"/></svg>Log &amp; diagnostics</a></li>
+          </ul>
+        </div>
+        <div class="nav-group">
+          <h2>Help</h2>
+          <ul>
+            <li><a href="#troubleshooting"><svg class="icon"><use href="#i-help"/></svg>Troubleshooting</a></li>
+            <li><a href="#glossary"><svg class="icon"><use href="#i-book"/></svg>Glossary &amp; tips</a></li>
+          </ul>
+        </div>
+        <p class="nav-foot">This help is stored on the Pi itself and works without internet.</p>
+      </nav>
 
-        <article id="install">
-          <h1>Installing as an app</h1>
-          <p class="sub">What this does for you, in plain terms.</p>
-          <p>
-            In Chrome, tapping the menu and choosing "Install app" (or "Add to
-            Home Screen") puts a real app icon on your phone that opens full
-            screen, with its own entry in your phone's app list — not just a
-            bookmark.
-          </p>
-          <p>
-            Chrome only offers that for a page it trusts as fully secure. This
-            page uses a self-signed certificate (there's no public domain
-            name for the Pi's own Wi-Fi to get a normal one from), so most of
-            the time Chrome only offers "Create shortcut" instead — which
-            still opens full screen without the address bar, so it already
-            works fine for everyday use. If you'd rather have the real "app"
-            entry, trust the certificate once per phone:
-          </p>
-          <ol>
-            <li>
-              Download the certificate:
-              <a href="/api/tls-cert.crt">/api/tls-cert.crt</a>
-            </li>
-            <li>
-              Android: Settings → Security (or "Security &amp; privacy") →
-              Encryption &amp; credentials → Install a certificate → CA
-              certificate → pick the downloaded file
-            </li>
-            <li>Reopen this page — Chrome should now offer "Install app"</li>
-          </ol>
-          <p>
-            This is entirely optional. The certificate itself isn't secret —
-            it's exactly what your browser already receives every time it
-            connects here.
-          </p>
-        </article>
+      <main id="content" tabindex="-1">
+        <div class="content">
+
+          <!-- ============================== START ============================== -->
+          <div class="hero" data-noindex>
+            <svg class="hero-waves" viewBox="0 0 640 220" fill="none" aria-hidden="true">
+              <g stroke="#4fd1c5" stroke-linecap="round" stroke-width="1.5">
+                <path d="M240 150A80 80 0 0 1 400 150" stroke-opacity=".3"/>
+                <path d="M190 150A130 130 0 0 1 450 150" stroke-opacity=".2"/>
+                <path d="M130 150A190 190 0 0 1 510 150" stroke-opacity=".13"/>
+                <path d="M60 150A260 260 0 0 1 580 150" stroke-opacity=".08"/>
+              </g>
+            </svg>
+            <svg class="hero-logo" viewBox="0 0 64 64" fill="none" stroke="currentColor" aria-hidden="true"><use href="#i-goggles"/></svg>
+            <h1><span class="un">un</span>goggled help</h1>
+            <p>Everything about the receiver: connecting it, every setting in the console, wiring buttons and LEDs, and what to do when something doesn't work.</p>
+            <button class="search-trigger hero-search" type="button" data-open-search>
+              <svg class="icon"><use href="#i-search"/></svg><span>Search, e.g. “password”, “GPIO”, “4K”</span>
+            </button>
+          </div>
+
+          <nav class="quick" aria-label="Popular topics" data-noindex>
+            <a href="#connect"><svg class="icon"><use href="#i-plug"/></svg>Connect it<small>Which cable goes where</small></a>
+            <a href="#gpio-pinout"><svg class="icon"><use href="#i-pins"/></svg>Pin diagram<small>GPIO vs. pin number</small></a>
+            <a href="#goggles"><svg class="icon"><use href="#i-goggles"/></svg>Goggles not found<small>Pick the goggles type</small></a>
+            <a href="#troubleshooting"><svg class="icon"><use href="#i-help"/></svg>Troubleshooting<small>Symptom → fix</small></a>
+          </nav>
+
+          <h2 class="group-title" id="group-start">Start</h2>
+
+          <section class="doc" id="start" data-group="Start" data-keywords="overview introduction about receiver what is">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-goggles"/></svg></span><h2>What ungoggled does</h2></div>
+            <p class="lead">ungoggled turns a Raspberry Pi 4B into a receiver for your DJI FPV goggles: the picture from the goggles appears on any HDMI screen, so friends can watch along on a TV or monitor.</p>
+            <p>The goggles send their live picture over a USB cable to the Pi. The Pi shows it on the screen connected to its HDMI port, can record it, and can stream it to spectators' phones. You control everything from the <strong>web console</strong>: a web page served by the Pi itself, opened on your phone over the Pi's own Wi-Fi. No internet and no app are needed.</p>
+            <figure>
+              <div class="fig">
+                <svg viewBox="0 0 380 320" role="img" aria-labelledby="conn-t conn-d" font-family="Inter, system-ui, sans-serif">
+                  <title id="conn-t">How everything is connected</title>
+                  <desc id="conn-d">The goggles connect with a USB-C cable to the Pi's USB-C port. The screen connects to the Pi's HDMI0 port. The Pi gets its power separately, through the 5 volt GPIO pins or PoE. Your phone and spectators' phones connect to the Pi's Wi-Fi called ungoggled.</desc>
+                  <!-- spectators -->
+                  <g stroke="#9aa3b2" stroke-width="1.5" fill="#151a22">
+                    <rect x="22" y="16" width="22" height="38" rx="5"/>
+                    <rect x="52" y="24" width="22" height="38" rx="5"/>
+                  </g>
+                  <text x="48" y="84" text-anchor="middle" font-size="13" fill="#9aa3b2">Spectators</text>
+                  <text x="48" y="100" text-anchor="middle" font-size="12" fill="#8d96a6">(optional)</text>
+                  <path d="M80 60 Q130 80 150 126" stroke="#4fd1c5" stroke-opacity=".6" stroke-width="1.5" stroke-dasharray="3 5" fill="none"/>
+                  <!-- phone -->
+                  <rect x="172" y="10" width="36" height="62" rx="7" fill="#151a22" stroke="#4fd1c5" stroke-width="2"/>
+                  <rect x="177" y="18" width="26" height="42" rx="3" fill="#4fd1c5" fill-opacity=".14"/>
+                  <text x="218" y="34" font-size="14" font-weight="600" fill="#e6ebf2">Your phone</text>
+                  <text x="218" y="52" font-size="12.5" fill="#9aa3b2">opens the console</text>
+                  <!-- wifi waves -->
+                  <g stroke="#4fd1c5" stroke-width="2" stroke-linecap="round" fill="none">
+                    <path d="M180 112a14 14 0 0 1 20 0" />
+                    <path d="M173 104a24 24 0 0 1 34 0" stroke-opacity=".7"/>
+                    <path d="M166 96a34 34 0 0 1 48 0" stroke-opacity=".45"/>
+                  </g>
+                  <text x="160" y="106" text-anchor="end" font-size="13" font-weight="600" fill="#e6ebf2">Wi-Fi</text>
+                  <text x="160" y="122" text-anchor="end" font-size="12" fill="#9aa3b2">“ungoggled”</text>
+                  <!-- Pi -->
+                  <rect x="136" y="134" width="108" height="86" rx="10" fill="#12352b" stroke="#4fd1c5" stroke-width="2"/>
+                  <text x="190" y="172" text-anchor="middle" font-size="16" font-weight="700" fill="#e6ebf2">Pi 4B</text>
+                  <text x="190" y="192" text-anchor="middle" font-size="13" font-weight="600" fill="#4fd1c5">ungoggled</text>
+                  <!-- goggles -->
+                  <g transform="translate(4 136) scale(1.25)" stroke="#e6ebf2" fill="none">
+                    <path d="M19 30H45A11 11 0 0 1 45 52H38.5L35.6 47.2A4 4 0 0 0 28.4 47.2L25.5 52H19A11 11 0 0 1 19 30Z" stroke-width="2.6" stroke-linejoin="round"/>
+                    <circle cx="22.5" cy="41" r="4" fill="#e6ebf2" stroke="none"/><circle cx="41.5" cy="41" r="4" fill="#e6ebf2" stroke="none"/>
+                  </g>
+                  <text x="44" y="232" text-anchor="middle" font-size="14" font-weight="600" fill="#e6ebf2">Goggles</text>
+                  <!-- USB-C cable -->
+                  <path d="M84 182H136" stroke="#4fd1c5" stroke-width="3" stroke-linecap="round"/>
+                  <text x="110" y="172" text-anchor="middle" font-size="12.5" font-weight="700" fill="#4fd1c5">USB-C</text>
+                  <!-- screen -->
+                  <rect x="290" y="146" width="84" height="56" rx="6" fill="#151a22" stroke="#e6ebf2" stroke-width="2"/>
+                  <rect x="297" y="153" width="70" height="42" rx="2" fill="#4fd1c5" fill-opacity=".12"/>
+                  <path d="M332 202v10M318 214h28" stroke="#e6ebf2" stroke-width="2" stroke-linecap="round"/>
+                  <text x="332" y="234" text-anchor="middle" font-size="14" font-weight="600" fill="#e6ebf2">Screen</text>
+                  <!-- HDMI cable -->
+                  <path d="M244 176H290" stroke="#4fd1c5" stroke-width="3" stroke-linecap="round"/>
+                  <text x="267" y="166" text-anchor="middle" font-size="12.5" font-weight="700" fill="#4fd1c5">HDMI0</text>
+                  <!-- power -->
+                  <path d="M190 220V268" stroke="#e05252" stroke-width="3" stroke-linecap="round"/>
+                  <rect x="136" y="268" width="108" height="40" rx="8" fill="#151a22" stroke="#e05252" stroke-width="2"/>
+                  <text x="190" y="293" text-anchor="middle" font-size="13.5" font-weight="600" fill="#e6ebf2">Power supply</text>
+                  <text x="200" y="248" font-size="12.5" fill="#9aa3b2">5 V: GPIO pins or PoE</text>
+                </svg>
+              </div>
+              <figcaption>The goggles' USB-C cable carries only the picture, not the Pi's power: the Pi needs its own supply.</figcaption>
+            </figure>
+            <div class="callout tip"><svg class="icon"><use href="#i-tip"/></svg><div><span class="ct">Tip</span><p>Every panel in the console has a small <strong>?</strong> in its top-right corner. It opens the matching chapter of this help.</p></div></div>
+          </section>
+
+          <section class="doc" id="connect" data-group="Start" data-keywords="setup wiring cable port first boot address ip">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-plug"/></svg></span><h2>Connect &amp; first start</h2></div>
+            <p class="lead">Four connections, then open the console on your phone.</p>
+            <h3 id="connect-wiring">Which cable goes where</h3>
+            <ol class="steps">
+              <li><strong>Goggles → Pi USB-C port.</strong> Use a USB-C data cable from the goggles to the Pi's USB-C port (the one normally used for power). The original <em>DJI FPV Goggles V1/V2</em> are the exception: they go into one of the Pi's <strong>USB-A</strong> ports.</li>
+              <li><strong>Screen → HDMI0.</strong> Connect the screen with a micro-HDMI cable to <strong>HDMI0</strong>, the micro-HDMI port right next to the USB-C port.</li>
+              <li><strong>Power the Pi separately</strong>, through its 5 V GPIO pins (for example with a power hat) or PoE. The goggles' cable does not power it.</li>
+              <li><strong>Switch everything on.</strong> Check that the goggles show a live camera picture.</li>
+            </ol>
+            <div class="callout tip"><svg class="icon"><use href="#i-tip"/></svg><div><span class="ct">Clean picture</span><p>For video without the goggles' on-screen display (battery, channel, signal bars), set in the goggles: <strong>Settings → Camera → Advanced Camera Settings → Camera View Recording → OFF</strong>. Switch it on if you want those overlays on the screen and in recordings. The Pi cannot remove overlays that are already in the picture.</p></div></div>
+            <h3 id="open-console">Open the console</h3>
+            <ol class="steps">
+              <li>On your phone, join the Wi-Fi <strong>ungoggled</strong> with the password <strong>ungoggled</strong> (the defaults of a fresh SD card; change them later under <a href="#wifi">Wi-Fi</a>).</li>
+              <li>Open <code>http://192.168.50.1</code> in the browser. <code>ungoggled.local</code> also works on most devices.</li>
+              <li>The very first visit asks you to choose a <a href="#password">password</a> (at least 8 characters).</li>
+            </ol>
+            <div class="callout note"><svg class="icon"><use href="#i-note"/></svg><div><span class="ct">Expected warnings</span><p>Your phone may say the Wi-Fi has <strong>no internet</strong>. That is normal: stay connected. Over <code>https://</code> the browser warns once that the connection isn't private, because the Pi makes its own certificate. Tap <span class="ui">Advanced</span>, then <span class="ui">Proceed</span>.</p></div></div>
+            <h3 id="console-tabs">The four tabs of the console</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Tab</th><th>What you find there</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Live</strong></td><td>Goggles and HDMI status, <a href="#preview">preview</a>, <a href="#recording">recording buttons</a>, <a href="#stream">spectator stream</a></td></tr>
+                  <tr><td><strong>Videos</strong></td><td><a href="#usb">USB video player</a> and your saved <a href="#recording">recordings</a></td></tr>
+                  <tr><td><strong>Settings</strong></td><td><a href="#goggles">Goggles</a>, <a href="#hdmi">HDMI &amp; idle screen</a>, recording, <a href="#wifi">Wi-Fi</a>, <a href="#hardware">beeper, LEDs &amp; buttons</a>, <a href="#graphs">graphs</a>, <a href="#terminal">terminal</a>, <a href="#password">password</a></td></tr>
+                  <tr><td><strong>System</strong></td><td><a href="#updates">Updates and versions</a>, <a href="#system">clock, reboot, shut down</a>, <a href="#graphs">last 30 minutes</a>, <a href="#log">diagnostics</a>, terminal</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="doc" id="install" data-group="Start" data-keywords="home screen pwa shortcut fullscreen certificate android chrome">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-phone"/></svg></span><h2>Install the console as an app</h2></div>
+            <p class="lead">Put the console on your phone's home screen so it opens full screen, like an app.</p>
+            <p>In Chrome, open the menu and choose <span class="ui">Install app</span> (or <span class="ui">Add to Home Screen</span>). That gives a real app icon with its own entry in the phone's app list.</p>
+            <p>Chrome only offers that for a page it fully trusts. The Pi uses a self-signed certificate (there is no public domain name for the Pi's own Wi-Fi to get a normal one), so most of the time Chrome offers only <span class="ui">Create shortcut</span>. That still opens full screen without the address bar and is fine for everyday use.</p>
+            <h3 id="install-trust">Want the real app entry? Trust the certificate once per phone</h3>
+            <ol class="steps">
+              <li>Download the certificate: <a href="/api/tls-cert.crt">/api/tls-cert.crt</a></li>
+              <li>Android: <strong>Settings → Security</strong> (or “Security &amp; privacy”) <strong>→ Encryption &amp; credentials → Install a certificate → CA certificate</strong>, then pick the downloaded file.</li>
+              <li>Open the console again. Chrome should now offer <span class="ui">Install app</span>.</li>
+            </ol>
+            <div class="callout note"><svg class="icon"><use href="#i-note"/></svg><div><p>This is entirely optional. The certificate isn't secret: it is exactly what your browser already receives every time it connects to the Pi.</p></div></div>
+          </section>
+
+          <!-- ============================== USING IT ============================== -->
+          <h2 class="group-title" id="group-using">Using it</h2>
+
+          <section class="doc" id="preview" data-group="Using it" data-keywords="live tab receiver start stop reconnect status">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-preview"/></svg></span><h2>Preview &amp; receiver</h2></div>
+            <p class="where">Where: <b>Live</b> tab · <b>System</b> tab</p>
+            <p class="lead">The preview box on the Live tab is a small copy of what goes out over HDMI, so you can check the picture without looking at the screen.</p>
+            <p>It is a small, low-frame-rate picture (up to 640 × 360 at 5 pictures per second), not the HDMI picture itself. Switching the preview off saves a little work and Wi-Fi traffic, but never touches the HDMI output.</p>
+            <h3 id="preview-status">The status boxes</h3>
+            <p><strong>Goggles input</strong> shows the picture size, frames per second and bitrate arriving from the goggles, and what the connection is doing: <span class="ui">Waiting for goggles</span>, <span class="ui">Connecting goggles</span>, <span class="ui">Goggles connected</span>, <span class="ui">Waiting for camera</span> (goggles there, no video yet), <span class="ui">Receiving video</span>. <strong>HDMI output</strong> shows the screen's mode, refresh rate and the rendered frames per second.</p>
+            <div class="callout note"><svg class="icon"><use href="#i-note"/></svg><div><p>A 60 Hz HDMI signal may carry a 30 fps camera picture. The console shows both numbers separately: the refresh rate is the HDMI signal timing, the rendered fps is how many camera pictures reach the screen. A higher HDMI rate does not make the camera faster.</p></div></div>
+            <h3 id="reconnect-goggles">Reconnect goggles</h3>
+            <p>On the Live tab. Starts a fresh connection to the goggles without restarting everything. <strong>Try this first if the picture gets stuck.</strong></p>
+            <h3 id="start-stop-receiver">Start / Stop receiver</h3>
+            <p>On the System tab. Stops listening to the goggles entirely; the screen keeps showing the idle screen. Mostly useful for troubleshooting: normally leave it running. The receiver starts by itself when the Pi starts and recovers on its own after the cable was pulled.</p>
+          </section>
+
+          <section class="doc" id="goggles" data-group="Using it" data-keywords="goggles type automatic goggles3 goggles2 v1 v2 o3 o4 air unit protocol detect remembered">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-goggles"/></svg></span><h2>Goggles</h2></div>
+            <p class="where">Where: <b>Settings</b> › first panel <b>Goggles</b></p>
+            <p class="lead">Tells the Pi which goggles are plugged in. <strong>Automatic</strong> finds out by itself and is right for most people.</p>
+            <div class="anatomy">
+              <div class="mock" role="img" aria-label="Drawing of the Goggles panel with three numbered parts">
+                <div class="m-head"><span class="m-badge"><svg class="icon" viewBox="0 0 64 64"><use href="#i-goggles"/></svg></span>Goggles<span class="m-q">?</span><i class="co abs" style="right:28px;top:0">3</i></div>
+                <span class="m-label">Goggles type</span>
+                <div class="m-row"><i class="co">1</i><span class="m-select" style="flex:1"><span>Automatic (recommended)</span></span></div>
+                <div class="m-row"><i class="co">2</i><span class="m-help" style="margin:0">Right now: <strong>Goggles 3 (detected)</strong></span></div>
+                <p class="m-help">Automatic works for most goggles. Not found? Pick the type.</p>
+              </div>
+              <ol class="callouts">
+                <li><i class="co">1</i><span><strong>Goggles type.</strong> Automatic, DJI Goggles 3 (O3 / O4 air unit), DJI Goggles 2, or DJI FPV Goggles V1 / V2. Saving happens as soon as you pick.</span></li>
+                <li><i class="co">2</i><span><strong>Right now</strong> shows what the receiver is using at this moment.</span></li>
+                <li><i class="co">3</i><span>The <strong>?</strong> opens this page.</span></li>
+              </ol>
+            </div>
+            <h3 id="goggles-types">The choices</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Choice</th><th>Status</th><th>Plug into</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Automatic</strong> (recommended)</td><td>Finds Goggles 3 and Goggles 2 by itself</td><td>USB-C</td></tr>
+                  <tr><td><strong>DJI Goggles 3</strong> (O3 / O4 air unit)</td><td>Tested with live HDMI output</td><td>USB-C</td></tr>
+                  <tr><td><strong>DJI Goggles 2</strong></td><td><span class="tag">experimental</span> not tested on real goggles yet</td><td>USB-C</td></tr>
+                  <tr><td><strong>DJI FPV Goggles V1 / V2</strong></td><td><span class="tag">experimental</span> not tested on real goggles yet; never found by Automatic, choose it yourself</td><td><strong>USB-A</strong></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3 id="goggles-automatic">How Automatic finds your goggles</h3>
+            <ol class="flow">
+              <li><b>Goggles plugged in.</b> The Pi recognises the pair of goggles.</li>
+              <li><b>Have these goggles shown a picture on this Pi before?</b>
+                <div class="branch">
+                  <div class="yes"><span class="lbl">Yes, remembered</span>The Pi uses only the way that worked last time. It never tries the other generation on them again.</div>
+                  <div class="no"><span class="lbl">No, new goggles</span>The Pi tries the Goggles 3 way first. Without a picture after a few seconds it tries the Goggles 2 way, then goes back, waiting longer each round (up to two minutes).</div>
+                </div>
+              </li>
+              <li class="ok"><b>First picture arrives.</b> The way that worked is remembered for this pair of goggles.</li>
+            </ol>
+            <p><strong>“Remembered”</strong> means: once a pair of goggles has shown a picture, the Pi knows which start sequence they need and sticks to it. That matters because Goggles 3 whose drone is simply not switched on yet must not be sent the Goggles 2 start sequence.</p>
+            <h3 id="goggles-fixed">When to pick a fixed type</h3>
+            <ul>
+              <li>Your goggles are <strong>not found</strong> with Automatic.</li>
+              <li>You have <strong>FPV Goggles V1/V2</strong> (Automatic never looks for them).</li>
+              <li>You want a setup that already works to <strong>stay exactly as it is</strong>: a fixed choice never tries anything else.</li>
+            </ul>
+            <p>Changing the type restarts the receiver; the goggles connect again by themselves within a few seconds.</p>
+            <div class="callout note"><svg class="icon"><use href="#i-note"/></svg><div><span class="ct">For helpers</span><p>If <code>UNGOGGLED_GOGGLES</code> is set in <code>/etc/default/dji-hdmi</code> on the Pi, that value is used while the console says Automatic; the panel then shows <span class="ui">System default: …</span>. What happened is written to the <a href="#log">log</a>: search for <code>Goggles protocol:</code>.</p></div></div>
+          </section>
+
+          <section class="doc" id="hdmi" data-group="Using it" data-keywords="screen monitor tv display resolution 1080p 4k 4k60 refresh mode port stretch 4:3 black bars idle fallback logo video image upload">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-hdmi"/></svg></span><h2>HDMI &amp; idle screen</h2></div>
+            <p class="where">Where: <b>Settings</b> › <b>HDMI</b> and <b>Idle screen</b></p>
+            <p class="lead">Controls what the connected screen shows. Leave <strong>Output mode</strong> on Automatic unless you have a reason.</p>
+            <div class="anatomy">
+              <div class="mock" role="img" aria-label="Drawing of the HDMI panel with four numbered parts">
+                <div class="m-head"><span class="m-badge"><svg class="icon"><use href="#i-hdmi"/></svg></span>HDMI<span class="m-q">?</span></div>
+                <span class="m-label">Output mode</span>
+                <div class="m-row"><i class="co">1</i><span class="m-select" style="flex:1"><span>Automatic · prefer 1080p</span></span></div>
+                <span class="m-label">Output port</span>
+                <div class="m-row"><i class="co">2</i><span class="m-select" style="flex:1"><span>Automatic · whichever port has a display</span></span></div>
+                <div class="m-row"><span class="m-btn"><svg class="icon"><use href="#i-check"/></svg>Apply</span></div>
+                <div class="m-row"><i class="co">3</i><span class="m-toggle"><span class="m-sw"></span>Stretch the live picture to fill the screen</span></div>
+                <div class="m-row"><i class="co">4</i><span class="m-toggle"><span class="m-sw"></span>Stretch USB videos to fill the screen</span></div>
+              </div>
+              <ol class="callouts">
+                <li><i class="co">1</i><span><strong>Output mode:</strong> the resolution and refresh rate. Automatic uses 1080p at up to 60 Hz.</span></li>
+                <li><i class="co">2</i><span><strong>Output port:</strong> only shown when screens are connected to both micro-HDMI ports; picks which one gets the picture.</span></li>
+                <li><i class="co">3</i><span><strong>Stretch the live picture:</strong> pulls a 4:3 goggles picture over the whole 16:9 screen.</span></li>
+                <li><i class="co">4</i><span><strong>Stretch USB videos:</strong> the same for videos from a USB drive, also while one plays.</span></li>
+              </ol>
+            </div>
+            <h3 id="hdmi-modes">Output mode</h3>
+            <p><strong>Automatic</strong> uses 1080p at up to 60 Hz, which is right for almost everyone. You can also pick any other mode the screen offers, including interlaced modes like 1080i for equipment that needs them. Interlaced modes are listed by field rate, so 1080i60 carries 30 full pictures per second. The picture is scaled to the chosen resolution, and applying a mode interrupts the output briefly.</p>
+            <h3 id="hdmi-4k" data-keywords="4k60 3840 2160 uhd hdmi 2.0 cable black">4K at 60 Hz</h3>
+            <p>If the screen can do 4K (3840 × 2160) at 50 or 60 Hz, those modes are listed too. Automatic still uses 1080p.</p>
+            <div class="callout warn"><svg class="icon"><use href="#i-warn"/></svg><div><span class="ct">4K60 needs two things</span><ul><li>The <strong>HDMI0</strong> port, next to the USB-C port. The other port can't do it.</li><li>A <strong>high-speed (HDMI 2.0) cable</strong>.</li></ul><p><strong>Black picture after choosing a 4K mode?</strong> Choose Automatic again and press Apply. If the picture does not come back, restart the Pi (System tab → <span class="ui">Reboot Pi</span>).</p></div></div>
+            <h3 id="hdmi-stretch" data-keywords="aspect ratio 4:3 16:9 black bars oval">Stretch to fill the screen</h3>
+            <p>Normally a picture is shown in its own shape, so a 4:3 picture (many action cameras, or the goggles in 4:3 mode) gets black bars at the sides of a 16:9 screen. The two stretch switches pull it over the whole screen instead; round things then look slightly oval. Both are off by default and the speed is the same either way. Switching the live one restarts the live picture once.</p>
+            <p>The Pi's display chip cannot stretch every live picture size. Such a picture stays unstretched, after a brief flicker when it starts.</p>
+            <h3 id="idle-screen" data-keywords="idle screen fallback no signal logo loop 3d fpv comic dark screen own picture upload">Idle screen</h3>
+            <p>What the screen shows while there's no live picture: before the goggles connect, or when the signal drops. Built in are <strong>Dark screen</strong>, three looping videos (<strong>Logo loop</strong>, <strong>Logo loop 3D</strong>, <strong>FPV comic</strong>) and a <strong>“No signal”</strong> picture. The built-in ones can't be deleted.</p>
+            <p>The button next to each entry says what tapping it does: <span class="ui">Play</span> appears while the idle screen is on the TV (it switches right away); <span class="ui">Use</span> appears while live video is showing (it becomes the next idle screen without interrupting the picture). The choice survives restarts.</p>
+            <h4 id="idle-upload">Your own picture or video</h4>
+            <p>Tap <span class="ui">Upload image or video</span>. An upload becomes the idle screen straight away.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th></th><th>Images</th><th>Videos</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Formats</strong></td><td>PNG, JPEG or WebP</td><td>MP4 with H.264 (not HEVC/H.265)</td></tr>
+                  <tr><td><strong>Size</strong></td><td>up to 12 MiB</td><td>up to 1920 × 1080 and 64 MiB</td></tr>
+                  <tr><td><strong>How many</strong></td><td>16 of your own</td><td>3 of your own</td></tr>
+                  <tr><td><strong>Shown</strong></td><td>whole, never cropped (limited to 1920 × 1080)</td><td>in an endless loop; converting takes a few seconds</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="callout example"><svg class="icon"><use href="#i-example"/></svg><div><span class="ct">Example</span><p>Your club logo as a PNG on a dark background: upload it, and the TV shows it every time nobody is flying. The built-in screens don't count towards the 16 pictures.</p></div></div>
+          </section>
+
+          <section class="doc" id="recording" data-group="Using it" data-keywords="record save clip dvr crash buffer auto-record flight last 30 seconds usb drive download delete sd card full">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-record"/></svg></span><h2>Recording <span class="tag">experimental</span></h2></div>
+            <p class="where">Where: buttons on <b>Live</b> · switches in <b>Settings</b> › <b>Recording</b> · files in <b>Videos</b></p>
+            <p class="lead">Saves the live goggles picture to the SD card exactly as it arrives, with no quality loss.</p>
+            <p>If the goggles' on-screen display (battery, channel, signal bars) is switched on in the goggles, it is part of the picture and of the recording. That is set on the goggles or in DJI Fly, not here.</p>
+            <div class="anatomy">
+              <div class="mock" role="img" aria-label="Drawing of the recording controls with five numbered parts">
+                <div class="m-head"><span class="m-badge"><svg class="icon"><use href="#i-record"/></svg></span>Recording<span class="m-q">?</span></div>
+                <div class="m-row"><i class="co">1</i><span class="m-btn"><svg class="icon"><use href="#i-play"/></svg>Start recording</span></div>
+                <div class="m-row"><i class="co">2</i><span class="m-btn"><svg class="icon"><use href="#i-clip"/></svg>Save last 30 seconds now</span></div>
+                <div class="m-sub">Settings › Recording</div>
+                <div class="m-row"><i class="co">3</i><span class="m-toggle"><span class="m-sw on"></span>Auto-record every flight</span></div>
+                <div class="m-row"><i class="co">4</i><span class="m-toggle"><span class="m-sw on"></span>Crash buffer (last 30 seconds)</span></div>
+                <div class="m-row"><i class="co">5</i><span class="m-toggle"><span class="m-sw"></span>Record to USB drive instead of SD card</span></div>
+              </div>
+              <ol class="callouts">
+                <li><i class="co">1</i><span><strong>Start / Stop recording:</strong> you decide when it starts and stops.</span></li>
+                <li><i class="co">2</i><span><strong>Save last 30 seconds now:</strong> grabs roughly the last half-minute, any time.</span></li>
+                <li><i class="co">3</i><span><strong>Auto-record every flight:</strong> nothing to press; keeps the 5 newest flights.</span></li>
+                <li><i class="co">4</i><span><strong>Crash buffer:</strong> when the signal drops, the last 30 seconds are saved by themselves; keeps the 3 newest clips.</span></li>
+                <li><i class="co">5</i><span><strong>Record to USB drive:</strong> saves to a USB stick instead of the SD card.</span></li>
+              </ol>
+            </div>
+            <h3 id="rec-which">Which one should I use?</h3>
+            <div class="grid-2">
+              <div class="card"><h4><svg class="icon"><use href="#i-record"/></svg>Auto-record every flight</h4><p>Switch it on and forget it. Every time you fly, a recording starts by itself and is saved the moment the signal ends. The 5 most recent flights are kept; the oldest is replaced automatically.</p></div>
+              <div class="card"><h4><svg class="icon"><use href="#i-clip"/></svg>Crash buffer (last 30 seconds)</h4><p>Like the instant replay in the DJI goggles. When the signal drops (say, in a crash) the last 30 seconds are saved on their own. Keeps the 3 most recent clips, separately from the 5 flights.</p></div>
+              <div class="card"><h4><svg class="icon"><use href="#i-play"/></svg>Start recording</h4><p>Manual control: start and stop yourself. Writes straight to the card while it records. Works alongside the switches above; all can run at once.</p></div>
+              <div class="card"><h4><svg class="icon"><use href="#i-clip"/></svg>Save last 30 seconds now</h4><p>For a moment you didn't plan to record and the signal never dropped. Works whether the crash buffer is on or off.</p></div>
+            </div>
+            <h3 id="rec-long">Long flights</h3>
+            <p>With auto-record, a long flight is saved in parts (<code>flight-…-2.h264</code> and so on) when the Pi's memory fills up. All parts of one flight count as one of the 5 kept flights. Switching the Pi off waits until a copy has finished.</p>
+            <h3 id="rec-where">Where do recordings go?</h3>
+            <p>By default to the SD card. Switch on <span class="ui">Record to USB drive instead of SD card</span> and plug a USB stick or drive into a USB-A port to save there instead: handy for long sessions, or to take the footage home on the stick. Without a drive plugged in, recordings stay on the SD card.</p>
+            <div class="callout warn"><svg class="icon"><use href="#i-warn"/></svg><div><span class="ct">Card full</span><p>With less than 2 GB free on the SD card, recording stops on its own and the console shows <span class="ui">Storage is full; recording stopped</span>. After the goggles' picture ends, the screen shows an “SD card full” notice (it never interrupts a live picture for that). Delete some recordings under <strong>Videos</strong>.</p></div></div>
+            <h3 id="rec-download">Download, play, delete</h3>
+            <p>The <strong>Recordings</strong> list on the Videos tab shows every file with a thumbnail. You can download it (big files stream straight from the card, and a broken download can continue), play it on the screen with <span class="ui">Play on HDMI</span>, or delete it (the console asks first).</p>
+          </section>
+
+          <section class="doc" id="usb" data-group="Using it" data-keywords="usb stick drive action camera dji action player playback slow motion speed fat exfat ntfs mp4 mov">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-usb"/></svg></span><h2>USB – ActionCam video player <span class="tag">experimental</span></h2></div>
+            <p class="where">Where: <b>Videos</b> tab</p>
+            <p class="lead">Plug an action camera or a USB stick into the Pi and play its videos on the screen. Handy for watching footage together without a laptop.</p>
+            <ol class="steps">
+              <li>Plug the camera (as USB storage) or stick into one of the Pi's <strong>USB-A</strong> ports, not the USB-C port the goggles use.</li>
+              <li>Its videos appear in the list, each with a thumbnail (<code>.mp4</code>, <code>.mov</code>, <code>.mkv</code>, <code>.avi</code>, <code>.m4v</code>, <code>.insv</code>, <code>.lrv</code>).</li>
+              <li>Tap a video to play it on the screen. Play/pause and seeking are done in the console; only the picture goes to the screen.</li>
+            </ol>
+            <div class="callout note"><svg class="icon"><use href="#i-note"/></svg><div><p>The Pi only opens drives formatted as <strong>FAT/FAT32, exFAT or NTFS</strong> (what cameras, memory cards and Windows use). A drive formatted differently (ext4, for example) is never opened. A drive that can't be opened is tried again every 30 seconds. The drive is only read, never changed.</p></div></div>
+            <h3 id="usb-speed">How smoothly is it playing?</h3>
+            <p>While a clip plays, a line under the time bar shows how many pictures per second really reach the screen and how fast the clip runs compared with real time (<strong>1.00×</strong> is real time). Very large action-camera clips can be more than the Pi can decode in real time; they then play in smooth slow motion, and this line tells you how slow. The same number appears in the HDMI output box and as the “TV” line of the frame-rate graph.</p>
+            <p>Pulling out the camera while a clip plays stops the player and brings the idle screen back.</p>
+            <h3 id="usb-camera">Does it work with my camera?</h3>
+            <p>Most common action cameras and formats work, but not every model has been tested. If a video doesn't show up or doesn't play cleanly, that's a known risk of this experimental feature.</p>
+          </section>
+
+          <section class="doc" id="stream" data-group="Using it" data-keywords="spectators watch phone browser qr code watch.html high low quality viewers">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-stream"/></svg></span><h2>Spectator stream <span class="tag">experimental</span></h2></div>
+            <p class="where">Where: <b>Live</b> tab › <b>Spectator stream</b></p>
+            <p class="lead">People standing around watch the live picture on their own phone, in a plain browser, over the Pi's Wi-Fi.</p>
+            <p>This is completely separate from the link you fly with; switching it on or off never affects your flight or the HDMI screen. Spectators see the picture with a delay of a second or two. It's off by default.</p>
+            <h3 id="stream-quality">High or low quality?</h3>
+            <div class="grid-2">
+              <div class="card"><h4>High quality</h4><p>The original goggles picture, close to what the HDMI screen shows. Realistic for <strong>one or two</strong> viewers at once.</p></div>
+              <div class="card"><h4>Low quality</h4><p>Smaller and a bit softer, but noticeably <strong>more viewers</strong> can watch at the same time.</p></div>
+            </div>
+            <p>Only one of the two runs at a time; switching one on turns the other off. The Pi's Wi-Fi radio is the real limit, and it is shared by all viewers and the console itself.</p>
+            <h3 id="stream-watch">How do spectators watch?</h3>
+            <ol class="steps">
+              <li>Tap <span class="ui">Show QR codes for spectators</span>. The screen shows two codes.</li>
+              <li>The first code joins the Pi's Wi-Fi (it contains the current network name and password).</li>
+              <li>The second opens the stream page <code>/watch.html</code>. Nothing to install.</li>
+            </ol>
+            <p>Their phone may say the Wi-Fi has no internet; that's expected. The first time, the browser warns that the connection isn't private: <span class="ui">Advanced</span>, then <span class="ui">Proceed</span>.</p>
+            <div class="callout tip"><svg class="icon"><use href="#i-tip"/></svg><div><p>The stream page never asks for the console password, so you can share it with anyone without giving them control.</p></div></div>
+          </section>
+
+          <!-- ============================== HARDWARE ============================== -->
+          <h2 class="group-title" id="group-hardware">Hardware &amp; wiring</h2>
+
+          <section class="doc" id="hardware" data-group="Hardware &amp; wiring" data-keywords="beeper buzzer piezo led leds status button shutdown gpio pins bcm settings">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-chip"/></svg></span><h2>Beeper, LEDs &amp; buttons</h2></div>
+            <p class="where">Where: <b>Settings</b> › <b>Beeper, LEDs &amp; buttons</b></p>
+            <p class="lead">All optional. If you wired up a beeper, status LEDs or buttons, tell the Pi here which pins they're on, or switch each one off if you don't have it.</p>
+            <div class="callout warn"><svg class="icon"><use href="#i-warn"/></svg><div><span class="ct">Numbers are GPIO numbers</span><p>Every number in this panel is a <strong>GPIO (BCM) number</strong>, not the physical pin number on the header. See the <a href="#gpio-pinout">pin diagram</a>: “GPIO 17” is physical pin 11.</p></div></div>
+            <div class="anatomy">
+              <div class="mock" role="img" aria-label="Drawing of the Beeper, LEDs and buttons panel with numbered parts">
+                <div class="m-head"><span class="m-badge"><svg class="icon"><use href="#i-chip"/></svg></span>Beeper, LEDs &amp; buttons<span class="m-q">?</span></div>
+                <div class="m-fields">
+                  <span class="m-toggle"><i class="co">1</i><span class="m-sw on"></span>Piezo beeper on GPIO</span><span class="m-input">6</span>
+                  <span class="m-toggle"><i class="co">2</i><span class="m-sw on"></span>Shutdown button on GPIO</span><span class="m-input">19</span>
+                  <span class="m-toggle"><i class="co">3</i><span class="m-sw on"></span>Goggles LED on GPIO</span><span class="m-input">17</span>
+                  <span class="m-toggle"><span class="m-sw on" style="margin-left:28px"></span>Video LED on GPIO</span><span class="m-input">23</span>
+                  <span class="m-toggle"><span class="m-sw on" style="margin-left:28px"></span>HDMI LED on GPIO</span><span class="m-input">24</span>
+                </div>
+                <div class="m-sub">Extra buttons</div>
+                <div class="m-row" style="margin:2px 0"><i class="co">4</i><span class="m-help" style="margin:0">GPIO · action · hold time</span></div>
+                <div class="m-brow"><span class="m-input">3</span><span class="m-select"><span>Shut down the Pi</span></span><span class="m-select"><span>Hold 2 s</span></span><span class="m-btn"><svg class="icon"><use href="#i-trash"/></svg></span></div>
+                <div class="m-brow"><span class="m-input">26</span><span class="m-select"><span>Save the last 30 seconds</span></span><span class="m-select"><span>Tap</span></span><span class="m-btn"><svg class="icon"><use href="#i-trash"/></svg></span></div>
+                <div class="m-row"><i class="co">5</i><span class="m-btn">Add a button</span><span class="m-btn">Add power button (GPIO 3)</span></div>
+                <div class="m-row"><i class="co">6</i><span class="m-toggle"><span class="m-sw"></span>Beep every 5 seconds until the clock is synced</span></div>
+                <div class="m-row"><i class="co">7</i><span class="m-btn"><svg class="icon"><use href="#i-check"/></svg>Apply</span><span class="m-btn"><svg class="icon"><use href="#i-bell"/></svg>Test buzzer</span></div>
+              </div>
+              <ol class="callouts">
+                <li><i class="co">1</i><span><strong>Piezo beeper</strong> (default GPIO 6 = pin 31). Switch off if you have none.</span></li>
+                <li><i class="co">2</i><span><strong>Shutdown button</strong> (default GPIO 19 = pin 35), made for the NuclearHazard V5 hat.</span></li>
+                <li><i class="co">3</i><span><strong>Three status LEDs:</strong> goggles (GPIO 17 = pin 11), video (GPIO 23 = pin 16), HDMI (GPIO 24 = pin 18).</span></li>
+                <li><i class="co">4</i><span><strong>Extra buttons:</strong> one row per button: its GPIO, what it does, how long to hold. The bin removes it. <a href="#extra-buttons">Details</a></span></li>
+                <li><i class="co">5</i><span><span class="ui">Add a button</span> adds a row (up to 4). <span class="ui">Add power button (GPIO 3)</span> adds GPIO 3 → shut down, 2 s hold. <a href="#power-button">Why GPIO 3?</a></span></li>
+                <li><i class="co">6</i><span><strong>Clock reminder:</strong> beeps until the Pi's clock is set.</span></li>
+                <li><i class="co">7</i><span><span class="ui">Apply</span> saves. <span class="ui">Test buzzer</span> plays a short beep; it works once the beeper pin is applied.</span></li>
+              </ol>
+            </div>
+            <h3 id="hw-defaults">The default pins at a glance</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Part</th><th>Type in the console</th><th>Physical pin</th><th>A GND pin nearby</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Piezo beeper</strong></td><td class="num">GPIO 6</td><td class="num">pin 31</td><td class="num">pin 30 or 34</td></tr>
+                  <tr><td><strong>Shutdown button</strong></td><td class="num">GPIO 19</td><td class="num">pin 35</td><td class="num">pin 34 or 39</td></tr>
+                  <tr><td><strong>Goggles LED</strong></td><td class="num">GPIO 17</td><td class="num">pin 11</td><td class="num">pin 9 or 14</td></tr>
+                  <tr><td><strong>Video LED</strong></td><td class="num">GPIO 23</td><td class="num">pin 16</td><td class="num">pin 14 or 20</td></tr>
+                  <tr><td><strong>HDMI LED</strong></td><td class="num">GPIO 24</td><td class="num">pin 18</td><td class="num">pin 20</td></tr>
+                  <tr><td><strong>Fan</strong> (not in the console)</td><td class="num">GPIO 14</td><td class="num">pin 8</td><td class="num">see <a href="#fan">Fan</a></td></tr>
+                  <tr><td><strong>Power button</strong> (if added)</td><td class="num">GPIO 3</td><td class="num">pin 5</td><td class="num">pin 6</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>Allowed are GPIO numbers <strong>2 to 27</strong>, and all pins in this panel must be <strong>different</strong> (otherwise the console says <span class="ui">GPIO pins must all be different.</span>).</p>
+            <h3 id="hw-beeps">What the beeper and LEDs tell you</h3>
+            <ul>
+              <li><strong>Goggles, video and HDMI</strong> each beep when they connect (a happy tone) and when they disconnect (a sad tone). The three events sound different, so you can tell them apart by ear.</li>
+              <li>The receiver plays <strong>one chime at startup</strong>.</li>
+              <li>Each <strong>LED</strong> lights up while its state is true and goes off otherwise: goggles attached, video live, HDMI screen connected.</li>
+              <li><span class="ui">Beep every 5 seconds until the clock is synced</span> (off by default) keeps chirping after the Pi starts until a browser has opened the console (or the Pi got the time from the internet). Then your recordings get the right date and time.</li>
+            </ul>
+          </section>
+
+          <section class="doc" id="gpio-pinout" data-group="Hardware &amp; wiring" data-keywords="gpio pinout pin header 40 bcm physical pin number diagram raspberry pi 4b 3v3 5v gnd ground">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-pins"/></svg></span><h2>Raspberry Pi 4B GPIO pin diagram</h2></div>
+            <p class="lead">The 40 pins on the edge of the Pi, which one is which, and which ones ungoggled uses.</p>
+            <h3 id="gpio-not-pin" data-keywords="confusion mistake pin 5 gpio 3 pin 29 gpio 5 bcm numbering">GPIO number is not the pin number</h3>
+            <p>Every pin has two numbers, and they are almost never the same:</p>
+            <ul>
+              <li>The <strong>physical pin number</strong> (1 to 40) is simply its position on the header, counted from pin 1.</li>
+              <li>The <strong>GPIO number</strong> (also called BCM number) is the name the Pi's chip gives it. <strong>The console always wants the GPIO number.</strong></li>
+            </ul>
+            <div class="callout example"><svg class="icon"><use href="#i-example"/></svg><div><span class="ct">A typical mix-up</span><p>A button is wired to <strong>physical pin 5</strong> and <strong>5</strong> is typed into the console. But physical pin 5 is <strong>GPIO 3</strong>, and “5” in the console means <strong>GPIO 5</strong>, which sits on <strong>physical pin 29</strong>, at the other end of the header. The button does nothing.</p></div></div>
+            <div class="vs">
+              <div class="wrong"><span class="big"><span>typed</span><b>5</b><span class="arrow">→</span><span>GPIO 5 = pin 29</span></span><p style="margin:6px 0 0">Wrong for a button on pin 5.</p></div>
+              <div><span class="big"><span>typed</span><b>3</b><span class="arrow">→</span><span>GPIO 3 = pin 5</span></span><p style="margin:6px 0 0">Right: the button on physical pin 5.</p></div>
+            </div>
+            <h3 id="gpio-orientation" data-keywords="orientation pin 1 square pad usb-c sd card board top view">Finding pin 1</h3>
+            <p>Hold the Pi with the pin header along the <strong>top edge</strong>: the USB-C port and the two micro-HDMI ports are then at the <strong>bottom left</strong>, the USB-A ports and the network socket on the right, the microSD card at the left edge (underneath). <strong>Pin 1</strong> is at the left end of the header, in the row closer to the middle of the board; on the back of the board it has a <strong>square solder pad</strong> (all others are round). Pin 2 is right next to it, at the board's edge.</p>
+            <figure>
+              <div class="fig">
+                <svg viewBox="0 0 400 290" role="img" aria-labelledby="board-t board-d" font-family="Inter, system-ui, sans-serif">
+                  <title id="board-t">Raspberry Pi 4B seen from above</title>
+                  <desc id="board-d">The pin header runs along the top edge. Pin 1 is at its left end in the lower row, pin 2 above it at the board edge, pin 39 and 40 at the right end. USB-C and the micro-HDMI ports HDMI0 and HDMI1 are on the bottom edge on the left. The microSD card sits underneath at the left edge. USB-A ports and Ethernet are on the right edge.</desc>
+                  <!-- board -->
+                  <rect x="40" y="30" width="300" height="198" rx="12" fill="#12352b" stroke="#2c5a4a" stroke-width="2"/>
+                  <g fill="#0c0f14" stroke="#2c5a4a" stroke-width="1.5">
+                    <circle cx="52.4" cy="42.4" r="5"/><circle cx="257" cy="42.4" r="5"/><circle cx="52.4" cy="215.3" r="5"/><circle cx="257" cy="215.3" r="5"/>
+                  </g>
+                  <!-- chip -->
+                  <rect x="118" y="100" width="54" height="54" rx="5" fill="#1b2230" stroke="#3a4656"/>
+                  <text x="145" y="131" text-anchor="middle" font-size="11" fill="#8d96a6">CPU</text>
+                  <!-- header -->
+                  <rect x="58" y="31" width="185" height="22" rx="3" fill="#0c0f14" stroke="#3a4656"/>
+                  <g><rect x="61.7" y="43.4" width="6.8" height="6.8" fill="#e3a645"/><circle cx="65.1" cy="37.9" r="3.2" fill="#e05252"/><circle cx="74.1" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="74.1" cy="37.9" r="3.2" fill="#e05252"/><circle cx="83.0" cy="46.8" r="2.6" fill="#0c0f14" stroke="#4fd1c5" stroke-width="1.4"/><circle cx="83.0" cy="37.9" r="3.2" fill="#8d96a6"/><circle cx="92.0" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="92.0" cy="37.9" r="3.2" fill="#4fd1c5"/><circle cx="101.0" cy="46.8" r="3.2" fill="#8d96a6"/><circle cx="101.0" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="109.9" cy="46.8" r="3.2" fill="#4fd1c5"/><circle cx="109.9" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="118.9" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="118.9" cy="37.9" r="3.2" fill="#8d96a6"/><circle cx="127.9" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="127.9" cy="37.9" r="3.2" fill="#4fd1c5"/><circle cx="136.9" cy="46.8" r="3.2" fill="#e3a645"/><circle cx="136.9" cy="37.9" r="3.2" fill="#4fd1c5"/><circle cx="145.8" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="145.8" cy="37.9" r="3.2" fill="#8d96a6"/><circle cx="154.8" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="154.8" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="163.8" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="163.8" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="172.7" cy="46.8" r="3.2" fill="#8d96a6"/><circle cx="172.7" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="181.7" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="181.7" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="190.7" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="190.7" cy="37.9" r="3.2" fill="#8d96a6"/><circle cx="199.7" cy="46.8" r="3.2" fill="#4fd1c5"/><circle cx="199.7" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="208.6" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="208.6" cy="37.9" r="3.2" fill="#8d96a6"/><circle cx="217.6" cy="46.8" r="3.2" fill="#4fd1c5"/><circle cx="217.6" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="226.6" cy="46.8" r="3.2" fill="#3a4656"/><circle cx="226.6" cy="37.9" r="3.2" fill="#3a4656"/><circle cx="235.5" cy="46.8" r="3.2" fill="#8d96a6"/><circle cx="235.5" cy="37.9" r="3.2" fill="#3a4656"/></g>
+                  <!-- pin labels -->
+                  <text x="65" y="22" text-anchor="middle" font-size="12" fill="#e6ebf2">2</text>
+                  <text x="235.5" y="22" text-anchor="middle" font-size="12" fill="#e6ebf2">40</text>
+                  <path d="M65 52v12" stroke="#f5c542" stroke-width="1.5"/>
+                  <text x="62" y="78" font-size="12.5" font-weight="700" fill="#f5c542">Pin 1 (square)</text>
+                  <text x="235.5" y="70" text-anchor="middle" font-size="12" fill="#e6ebf2">39</text>
+                  <text x="276" y="22" font-size="12" fill="#9aa3b2">header</text>
+                  <!-- sd card -->
+                  <rect x="30" y="110" width="26" height="34" rx="3" fill="none" stroke="#9aa3b2" stroke-width="1.5" stroke-dasharray="4 3"/>
+                  <text x="62" y="124" font-size="12" fill="#9aa3b2">microSD</text>
+                  <text x="62" y="139" font-size="12" fill="#9aa3b2">(underneath)</text>
+                  <!-- right ports -->
+                  <g fill="#1b2230" stroke="#6b7585" stroke-width="1.5">
+                    <rect x="300" y="40" width="64" height="50" rx="4"/>
+                    <rect x="300" y="98" width="64" height="52" rx="4"/>
+                    <rect x="300" y="158" width="64" height="52" rx="4"/>
+                  </g>
+                  <text x="332" y="128" text-anchor="middle" font-size="11" fill="#9aa3b2" transform="rotate(-90 332 125)">USB-A &amp; Ethernet</text>
+                  <!-- bottom ports -->
+                  <rect x="63.5" y="214" width="32" height="18" rx="7" fill="#1b2230" stroke="#4fd1c5" stroke-width="2"/>
+                  <rect x="118.8" y="216" width="26" height="16" rx="3" fill="#1b2230" stroke="#4fd1c5" stroke-width="2"/>
+                  <rect x="166.4" y="216" width="26" height="16" rx="3" fill="#1b2230" stroke="#6b7585" stroke-width="1.5"/>
+                  <rect x="222" y="213" width="17" height="19" rx="6" fill="#1b2230" stroke="#6b7585" stroke-width="1.5"/>
+                  <text x="79.5" y="250" text-anchor="middle" font-size="12.5" font-weight="700" fill="#4fd1c5">USB-C</text>
+                  <text x="79.5" y="266" text-anchor="middle" font-size="11.5" fill="#9aa3b2">goggles</text>
+                  <text x="131.8" y="250" text-anchor="middle" font-size="12.5" font-weight="700" fill="#4fd1c5">HDMI0</text>
+                  <text x="131.8" y="266" text-anchor="middle" font-size="11.5" fill="#9aa3b2">screen</text>
+                  <text x="179.4" y="250" text-anchor="middle" font-size="12.5" fill="#9aa3b2">HDMI1</text>
+                  <text x="230.5" y="250" text-anchor="middle" font-size="12" fill="#9aa3b2">audio</text>
+                </svg>
+              </div>
+              <figcaption>Top view. Coloured dots on the header: the pins ungoggled uses by default (teal), 5 V (red), 3.3 V (amber) and GND (grey).</figcaption>
+            </figure>
+            <h3 id="gpio-table" data-keywords="all pins table list header map">All 40 pins</h3>
+            <p>Drawn the usual way: header standing upright, pin 1 at the top left. Odd pins are in the left column, even pins in the right column. Tap a colour to show only those pins.</p>
+            <ul class="pin-legend" data-noindex>
+              <li><button type="button" data-show="used" aria-pressed="false"><span class="sw used"></span>Used by ungoggled</button></li>
+              <li><button type="button" data-show="gnd" aria-pressed="false"><span class="sw gnd"></span>GND (ground)</button></li>
+              <li><button type="button" data-show="power" aria-pressed="false"><span class="sw v5"></span><span class="sw v3"></span>5 V / 3.3 V</button></li>
+              <li><button type="button" data-show="free" aria-pressed="false"><span class="sw free"></span>Free GPIO</button></li>
+            </ul>
+            <div class="pinout-wrap" id="pinout-wrap">
+              <div class="orient" aria-hidden="true"><span>↑ SD-card end of the header</span><span>board edge →</span></div>
+              <table class="pinout">
+                <caption class="sr-only">Raspberry Pi 4B 40-pin header: physical pin numbers, GPIO (BCM) names and what ungoggled uses them for</caption>
+                <colgroup><col class="c-use"/><col class="c-name"/><col class="c-pin"/><col class="c-pin"/><col class="c-name"/><col class="c-use"/></colgroup>
+                <thead><tr><th scope="col">ungoggled</th><th scope="col">Name</th><th scope="col">Pin</th><th scope="col">Pin</th><th scope="col">Name</th><th scope="col">ungoggled</th></tr></thead>
+                <tbody>
+                  <tr><td class="use l"></td><td class="name l">3V3</td><td class="pin l k-3v3 p1"><span title="Pin 1: 3V3">1</span></td><td class="pin r k-5v"><span title="Pin 2: 5V">2</span></td><td class="name r">5V</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO2<small>SDA</small></td><td class="pin l k-free"><span title="Pin 3: GPIO 2">3</span></td><td class="pin r k-5v"><span title="Pin 4: 5V">4</span></td><td class="name r">5V</td><td class="use r"></td></tr>
+                  <tr><td class="use l"><span class="u opt">Power button (if added)</span></td><td class="name l">GPIO3<small>SCL</small></td><td class="pin l k-opt"><span title="Pin 5: GPIO 3">5</span></td><td class="pin r k-gnd"><span title="Pin 6: GND">6</span></td><td class="name r">GND</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO4</td><td class="pin l k-free"><span title="Pin 7: GPIO 4">7</span></td><td class="pin r k-used"><span title="Pin 8: GPIO 14">8</span></td><td class="name r">GPIO14<small>TXD</small></td><td class="use r"><span class="u">Fan</span></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GND</td><td class="pin l k-gnd"><span title="Pin 9: GND">9</span></td><td class="pin r k-free"><span title="Pin 10: GPIO 15">10</span></td><td class="name r">GPIO15<small>RXD</small></td><td class="use r"></td></tr>
+                  <tr><td class="use l"><span class="u">Goggles LED</span></td><td class="name l">GPIO17</td><td class="pin l k-used"><span title="Pin 11: GPIO 17">11</span></td><td class="pin r k-free"><span title="Pin 12: GPIO 18">12</span></td><td class="name r">GPIO18</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO27</td><td class="pin l k-free"><span title="Pin 13: GPIO 27">13</span></td><td class="pin r k-gnd"><span title="Pin 14: GND">14</span></td><td class="name r">GND</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO22</td><td class="pin l k-free"><span title="Pin 15: GPIO 22">15</span></td><td class="pin r k-used"><span title="Pin 16: GPIO 23">16</span></td><td class="name r">GPIO23</td><td class="use r"><span class="u">Video LED</span></td></tr>
+                  <tr><td class="use l"></td><td class="name l">3V3</td><td class="pin l k-3v3"><span title="Pin 17: 3V3">17</span></td><td class="pin r k-used"><span title="Pin 18: GPIO 24">18</span></td><td class="name r">GPIO24</td><td class="use r"><span class="u">HDMI LED</span></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO10<small>MOSI</small></td><td class="pin l k-free"><span title="Pin 19: GPIO 10">19</span></td><td class="pin r k-gnd"><span title="Pin 20: GND">20</span></td><td class="name r">GND</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO9<small>MISO</small></td><td class="pin l k-free"><span title="Pin 21: GPIO 9">21</span></td><td class="pin r k-free"><span title="Pin 22: GPIO 25">22</span></td><td class="name r">GPIO25</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO11<small>SCLK</small></td><td class="pin l k-free"><span title="Pin 23: GPIO 11">23</span></td><td class="pin r k-free"><span title="Pin 24: GPIO 8">24</span></td><td class="name r">GPIO8<small>CE0</small></td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GND</td><td class="pin l k-gnd"><span title="Pin 25: GND">25</span></td><td class="pin r k-free"><span title="Pin 26: GPIO 7">26</span></td><td class="name r">GPIO7<small>CE1</small></td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO0<small>reserved</small></td><td class="pin l k-free"><span title="Pin 27: GPIO 0">27</span></td><td class="pin r k-free"><span title="Pin 28: GPIO 1">28</span></td><td class="name r">GPIO1<small>reserved</small></td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO5</td><td class="pin l k-free"><span title="Pin 29: GPIO 5">29</span></td><td class="pin r k-gnd"><span title="Pin 30: GND">30</span></td><td class="name r">GND</td><td class="use r"></td></tr>
+                  <tr><td class="use l"><span class="u">Beeper</span></td><td class="name l">GPIO6</td><td class="pin l k-used"><span title="Pin 31: GPIO 6">31</span></td><td class="pin r k-free"><span title="Pin 32: GPIO 12">32</span></td><td class="name r">GPIO12</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO13</td><td class="pin l k-free"><span title="Pin 33: GPIO 13">33</span></td><td class="pin r k-gnd"><span title="Pin 34: GND">34</span></td><td class="name r">GND</td><td class="use r"></td></tr>
+                  <tr><td class="use l"><span class="u">Shutdown button</span></td><td class="name l">GPIO19</td><td class="pin l k-used"><span title="Pin 35: GPIO 19">35</span></td><td class="pin r k-free"><span title="Pin 36: GPIO 16">36</span></td><td class="name r">GPIO16</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GPIO26</td><td class="pin l k-free"><span title="Pin 37: GPIO 26">37</span></td><td class="pin r k-free"><span title="Pin 38: GPIO 20">38</span></td><td class="name r">GPIO20</td><td class="use r"></td></tr>
+                  <tr><td class="use l"></td><td class="name l">GND</td><td class="pin l k-gnd"><span title="Pin 39: GND">39</span></td><td class="pin r k-free"><span title="Pin 40: GPIO 21">40</span></td><td class="name r">GPIO21</td><td class="use r"></td></tr>
+                </tbody>
+              </table>
+              <div class="orient" aria-hidden="true"><span>↓ USB / Ethernet end</span><span></span></div>
+            </div>
+            <div class="callout warn"><svg class="icon"><use href="#i-warn"/></svg><div><span class="ct">Careful</span><ul><li>The Pi's GPIO pins work with <strong>3.3 V</strong>. Never connect 5 V to a GPIO pin.</li><li>Never connect a 5 V or 3.3 V pin directly to GND: that is a short circuit.</li><li>Wire with the Pi switched off.</li></ul></div></div>
+            <p>GPIO 0 and 1 (pins 27 and 28) are reserved for identifying hats; the console only accepts GPIO 2 to 27. GPIO 2 and 3 (pins 3 and 5) are also the pins hats use to talk to the Pi (I²C, marked SDA/SCL).</p>
+          </section>
+
+          <section class="doc" id="wiring" data-group="Hardware &amp; wiring" data-keywords="wiring example led resistor ohm piezo beeper switch push button ground breadboard anode cathode long leg">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-plug"/></svg></span><h2>Wiring examples</h2></div>
+            <p class="lead">Every part connects between one <strong>GPIO pin</strong> and one <strong>GND pin</strong>. Any GND pin works; the nearest one keeps the wires short.</p>
+            <h3 id="wiring-led">A status LED (example: the goggles LED)</h3>
+            <figure>
+              <div class="fig">
+                <svg viewBox="0 0 320 150" role="img" aria-labelledby="led-t led-d" font-family="Inter, system-ui, sans-serif">
+                  <title id="led-t">Wiring a status LED</title>
+                  <desc id="led-d">Physical pin 11, GPIO 17, goes to a resistor of for example 330 ohms, then to the long leg of the LED. The short leg of the LED goes back to a GND pin, for example physical pin 9.</desc>
+                  <rect x="8" y="18" width="88" height="42" rx="8" fill="#4fd1c5" fill-opacity=".14" stroke="#4fd1c5" stroke-width="2"/>
+                  <text x="52" y="36" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e6ebf2">GPIO 17</text>
+                  <text x="52" y="52" text-anchor="middle" font-size="12" fill="#9aa3b2">pin 11</text>
+                  <rect x="8" y="94" width="88" height="42" rx="8" fill="#5b6474" fill-opacity=".25" stroke="#8d96a6" stroke-width="2"/>
+                  <text x="52" y="112" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e6ebf2">GND</text>
+                  <text x="52" y="128" text-anchor="middle" font-size="12" fill="#9aa3b2">pin 9</text>
+                  <path d="M96 39H128M178 39H226" stroke="#4fd1c5" stroke-width="2.5" fill="none"/>
+                  <rect x="128" y="31" width="50" height="16" rx="7" fill="#d9c7a3" stroke="#a8936a"/>
+                  <g stroke-width="5"><path d="M140 31v16" stroke="#8a5a2b"/><path d="M150 31v16" stroke="#e3a645"/><path d="M160 31v16" stroke="#8a5a2b"/><path d="M170 31v16" stroke="#c9a227" stroke-width="3"/></g>
+                  <text x="153" y="22" text-anchor="middle" font-size="12" fill="#9aa3b2">resistor, e.g. 330 Ω</text>
+                  <circle cx="246" cy="39" r="17" fill="#4fd1c5" fill-opacity=".25" stroke="#4fd1c5" stroke-width="2"/>
+                  <circle cx="246" cy="39" r="8" fill="#4fd1c5"/>
+                  <text x="246" y="72" text-anchor="middle" font-size="12" fill="#e6ebf2">LED</text>
+                  <text x="218" y="64" text-anchor="end" font-size="11.5" fill="#9aa3b2">long leg +</text>
+                  <path d="M263 39H300V115H96" stroke="#8d96a6" stroke-width="2.5" fill="none"/>
+                  <text x="200" y="108" text-anchor="middle" font-size="11.5" fill="#9aa3b2">short leg − (flat side) to GND</text>
+                </svg>
+              </div>
+              <figcaption>The order of resistor and LED doesn't matter, but the LED's direction does: long leg towards the GPIO, short leg to GND.</figcaption>
+            </figure>
+            <p>Use plain (non-addressable) LEDs with one series resistor each, for example about 330 Ω. The <strong>video LED</strong> (GPIO 23, pin 16) and <strong>HDMI LED</strong> (GPIO 24, pin 18) are wired exactly the same way; pin 14 and pin 20 are GND pins close to them.</p>
+            <h3 id="wiring-piezo">The piezo beeper</h3>
+            <figure>
+              <div class="fig">
+                <svg viewBox="0 0 320 150" role="img" aria-labelledby="pz-t pz-d" font-family="Inter, system-ui, sans-serif">
+                  <title id="pz-t">Wiring the piezo beeper</title>
+                  <desc id="pz-d">Physical pin 31, GPIO 6, goes to the plus side of a passive piezo. Its minus side goes to a GND pin, for example physical pin 30.</desc>
+                  <rect x="8" y="18" width="88" height="42" rx="8" fill="#4fd1c5" fill-opacity=".14" stroke="#4fd1c5" stroke-width="2"/>
+                  <text x="52" y="36" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e6ebf2">GPIO 6</text>
+                  <text x="52" y="52" text-anchor="middle" font-size="12" fill="#9aa3b2">pin 31</text>
+                  <rect x="8" y="94" width="88" height="42" rx="8" fill="#5b6474" fill-opacity=".25" stroke="#8d96a6" stroke-width="2"/>
+                  <text x="52" y="112" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e6ebf2">GND</text>
+                  <text x="52" y="128" text-anchor="middle" font-size="12" fill="#9aa3b2">pin 30</text>
+                  <path d="M96 39H200V58" stroke="#e05252" stroke-width="2.5" fill="none"/>
+                  <path d="M240 58V115H96" stroke="#8d96a6" stroke-width="2.5" fill="none"/>
+                  <circle cx="220" cy="78" r="30" fill="#1b2230" stroke="#c9a227" stroke-width="2.5"/>
+                  <circle cx="220" cy="78" r="17" fill="#c9a227" fill-opacity=".35" stroke="#c9a227"/>
+                  <text x="190" y="62" text-anchor="end" font-size="13" font-weight="700" fill="#e05252">+</text>
+                  <text x="254" y="62" font-size="13" font-weight="700" fill="#9aa3b2">−</text>
+                  <text x="270" y="82" font-size="12" fill="#e6ebf2">piezo</text>
+                  <text x="270" y="97" font-size="11.5" fill="#9aa3b2">(passive)</text>
+                  <g stroke="#4fd1c5" stroke-width="1.5" fill="none" stroke-linecap="round" opacity=".7"><path d="M262 36a20 20 0 0 1 10 14"/><path d="M270 26a32 32 0 0 1 16 22"/></g>
+                </svg>
+              </div>
+              <figcaption>A passive piezo, driven directly by the pin. Pin 34 is another GND close to pin 31.</figcaption>
+            </figure>
+            <h3 id="wiring-button">A push button (shutdown button or extra button)</h3>
+            <figure>
+              <div class="fig">
+                <svg viewBox="0 0 320 150" role="img" aria-labelledby="bt-t bt-d" font-family="Inter, system-ui, sans-serif">
+                  <title id="bt-t">Wiring a push button</title>
+                  <desc id="bt-d">A momentary push button between a GPIO pin, for example GPIO 26 on physical pin 37, and a GND pin, for example physical pin 39. No resistor is needed.</desc>
+                  <rect x="8" y="18" width="88" height="42" rx="8" fill="#4fd1c5" fill-opacity=".14" stroke="#4fd1c5" stroke-width="2"/>
+                  <text x="52" y="36" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e6ebf2">GPIO 26</text>
+                  <text x="52" y="52" text-anchor="middle" font-size="12" fill="#9aa3b2">pin 37</text>
+                  <rect x="8" y="94" width="88" height="42" rx="8" fill="#5b6474" fill-opacity=".25" stroke="#8d96a6" stroke-width="2"/>
+                  <text x="52" y="112" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e6ebf2">GND</text>
+                  <text x="52" y="128" text-anchor="middle" font-size="12" fill="#9aa3b2">pin 39</text>
+                  <path d="M96 39H180V64" stroke="#4fd1c5" stroke-width="2.5" fill="none"/>
+                  <path d="M240 64V115H96" stroke="#8d96a6" stroke-width="2.5" fill="none"/>
+                  <circle cx="180" cy="66" r="4" fill="#e6ebf2"/><circle cx="240" cy="66" r="4" fill="#e6ebf2"/>
+                  <path d="M176 56H244" stroke="#e6ebf2" stroke-width="3" stroke-linecap="round"/>
+                  <path d="M210 56V40" stroke="#e6ebf2" stroke-width="3"/>
+                  <rect x="196" y="28" width="28" height="12" rx="4" fill="#4fd1c5"/>
+                  <text x="252" y="38" font-size="12" fill="#e6ebf2">push button</text>
+                  <text x="252" y="53" font-size="11.5" fill="#9aa3b2">(momentary)</text>
+                  <text x="210" y="90" text-anchor="middle" font-size="11.5" fill="#9aa3b2">pressed = pin connected to GND</text>
+                </svg>
+              </div>
+              <figcaption>Example with GPIO 26: its pin 37 and the GND pin 39 are next to each other at the bottom left of the header.</figcaption>
+            </figure>
+            <p>Buttons need <strong>no resistor</strong>: the pin is held “high” inside the Pi, and pressing the button connects it to GND. Use a <strong>momentary</strong> switch (springs back when released), not a latching on/off switch.</p>
+            <p>The default <strong>shutdown button</strong> (GPIO 19, pin 35) is wired the same way, with GND on pin 34 or 39. GPIO 19 is the default because it matches the NuclearHazard V5 hat. For a button that can also <em>start</em> the Pi, see <a href="#power-button">Power button</a>.</p>
+          </section>
+
+          <section class="doc" id="extra-buttons" data-group="Hardware &amp; wiring" data-keywords="extra buttons button action hold time tap reboot shutdown save clip record script restart receiver button-scripts">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-button"/></svg></span><h2>Extra buttons <span class="tag new">new</span></h2></div>
+            <p class="where">Where: <b>Settings</b> › <b>Beeper, LEDs &amp; buttons</b> › <b>Extra buttons</b></p>
+            <p class="lead">Up to four more push buttons, each with one job. Each one is a momentary switch between a GPIO pin and a GND pin (<a href="#wiring-button">wiring</a>).</p>
+            <h3 id="buttons-add">Adding a button</h3>
+            <ol class="steps">
+              <li>Wire the button between a free GPIO pin and a GND pin (see the <a href="#gpio-pinout">pin diagram</a> for free pins).</li>
+              <li>Tap <span class="ui">Add a button</span>. A new row appears.</li>
+              <li>Type the <strong>GPIO number</strong> (not the pin number), pick the action and the hold time.</li>
+              <li>Tap <span class="ui">Apply</span>.</li>
+            </ol>
+            <h3 id="buttons-actions">What a button can do</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Action</th><th>Starts with hold</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Shut down the Pi</strong></td><td>Hold 2 s</td></tr>
+                  <tr><td><strong>Reboot the Pi</strong></td><td>Hold 2 s</td></tr>
+                  <tr><td><strong>Save the last 30 seconds</strong></td><td>Tap</td></tr>
+                  <tr><td><strong>Start / stop recording</strong></td><td>Tap</td></tr>
+                  <tr><td><strong>Restart the receiver</strong></td><td>Hold 1 s</td></tr>
+                  <tr><td><strong>Run a script</strong></td><td>Tap</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>The <strong>hold time</strong> can be changed for every button: <strong>Tap</strong>, or hold for <strong>1, 2, 3 or 5 seconds</strong>. Shut down and reboot start with 2 seconds so that a knock in your bag doesn't switch the Pi off.</p>
+            <div class="callout example"><svg class="icon"><use href="#i-example"/></svg><div><span class="ct">Example: a “clip” button on the case</span><p>Push button between pin 37 (GPIO 26) and pin 39 (GND). In the console: <span class="ui">Add a button</span>, GPIO <strong>26</strong>, <span class="ui">Save the last 30 seconds</span>, <span class="ui">Tap</span>, <span class="ui">Apply</span>. Press it after a great line and the last half-minute is saved.</p></div></div>
+            <h3 id="buttons-scripts" data-keywords="script shell sh file executable chmod ssh root">Running your own script</h3>
+            <p>A button with <span class="ui">Run a script</span> runs a file of your own. The console only lets you type the file's <strong>name</strong>; you have to put the file onto the Pi yourself, over SSH or the <a href="#terminal">terminal</a>, into the folder <code>/var/lib/dji-hdmi/button-scripts/</code>, and make it executable. It runs as the Pi's administrator (root) and is stopped after 60 seconds.</p>
+            <p>Example: a button that restarts the Pi's Wi-Fi (for someone who knows the command line):</p>
+            <pre><code>mkdir -p /var/lib/dji-hdmi/button-scripts
+printf '#!/bin/sh\nsystemctl restart NetworkManager\n' &gt; /var/lib/dji-hdmi/button-scripts/wifi-restart.sh
+chmod +x /var/lib/dji-hdmi/button-scripts/wifi-restart.sh</code></pre>
+            <p>Then type <code>wifi-restart.sh</code> as the script name. Names may contain only letters, digits, <code>-</code>, <code>_</code> and <code>.</code>.</p>
+            <div class="callout tip"><svg class="icon"><use href="#i-tip"/></svg><div><p>Every press is written to the <a href="#log">log</a>, together with the reason when nothing happened (an update being installed, no clip to save yet, a script that failed).</p></div></div>
+          </section>
+
+          <section class="doc" id="power-button" data-group="Hardware &amp; wiring" data-keywords="power button on off start wake gpio 3 pin 5 pin 6 wake_on_gpio bootloader shutdown boot">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-power"/></svg></span><h2>Power button: one switch to shut down and start</h2></div>
+            <p class="lead">A button between <strong>physical pin 5</strong> (GPIO 3) and <strong>physical pin 6</strong> (GND, right next to it) can both shut the Pi down and start it again.</p>
+            <figure>
+              <div class="fig">
+                <svg viewBox="0 0 320 192" role="img" aria-labelledby="pb-t pb-d" font-family="Inter, system-ui, sans-serif">
+                  <title id="pb-t">Power button on pins 5 and 6</title>
+                  <desc id="pb-d">The first six pins of the header, three rows of two. Pin 5, GPIO 3, in the left column, third row, and pin 6, GND, in the right column, third row, are connected through a push button.</desc>
+                  <rect x="20" y="14" width="92" height="140" rx="8" fill="#0c0f14" stroke="#3a4656"/>
+                  <g font-size="12.5" font-weight="700" text-anchor="middle">
+                    <rect x="34" y="26" width="26" height="26" rx="4" fill="#e3a645"/><text x="47" y="44" fill="#1d1405">1</text>
+                    <circle cx="85" cy="39" r="13" fill="#e05252"/><text x="85" y="44" fill="#fff">2</text>
+                    <circle cx="47" cy="84" r="13" fill="#2a3442" stroke="#3a4656"/><text x="47" y="89" fill="#fff">3</text>
+                    <circle cx="85" cy="84" r="13" fill="#e05252"/><text x="85" y="89" fill="#fff">4</text>
+                    <circle cx="47" cy="129" r="14" fill="#4fd1c5"/><text x="47" y="134" fill="#0c0f14">5</text>
+                    <circle cx="85" cy="129" r="14" fill="#5b6474" stroke="#8d96a6" stroke-width="2"/><text x="85" y="134" fill="#fff">6</text>
+                  </g>
+                  <text x="66" y="186" text-anchor="middle" font-size="11" fill="#8d96a6">pins 1–6, top of the header</text>
+                  <path d="M47 143V164H210V104" stroke="#4fd1c5" stroke-width="2.5" fill="none"/>
+                  <path d="M99 129H150V104" stroke="#8d96a6" stroke-width="2.5" fill="none"/>
+                  <circle cx="150" cy="102" r="4" fill="#e6ebf2"/><circle cx="210" cy="102" r="4" fill="#e6ebf2"/>
+                  <path d="M146 92H214" stroke="#e6ebf2" stroke-width="3" stroke-linecap="round"/>
+                  <path d="M180 92V76" stroke="#e6ebf2" stroke-width="3"/>
+                  <rect x="166" y="64" width="28" height="12" rx="4" fill="#4fd1c5"/>
+                  <text x="226" y="70" font-size="13" font-weight="700" fill="#e6ebf2">power button</text>
+                  <text x="226" y="86" font-size="11.5" fill="#9aa3b2">momentary</text>
+                  <text x="128" y="182" font-size="12" fill="#4fd1c5" font-weight="700">pin 5 = GPIO 3</text>
+                  <text x="104" y="151" font-size="12" fill="#9aa3b2" font-weight="700">pin 6 = GND</text>
+                </svg>
+              </div>
+              <figcaption>Pins 5 and 6 sit side by side in the third row from the top (pin 1 end).</figcaption>
+            </figure>
+            <h3 id="power-button-setup">Setting it up</h3>
+            <ol class="steps">
+              <li>Wire a momentary push button between physical pin 5 and physical pin 6.</li>
+              <li>In <strong>Settings › Beeper, LEDs &amp; buttons</strong> tap <span class="ui">Add power button (GPIO 3)</span>. This adds GPIO 3 → <span class="ui">Shut down the Pi</span> with a 2-second hold.</li>
+              <li>Tap <span class="ui">Apply</span>.</li>
+            </ol>
+            <h3 id="power-button-how">How it works</h3>
+            <ul>
+              <li><strong>Pi running:</strong> hold the button for 2 seconds and the Pi shuts down properly.</li>
+              <li><strong>Pi shut down:</strong> a short press starts it again. This is done by the Pi's own start-up firmware, not by ungoggled: nothing runs while the Pi is off, and nothing else has to be set up.</li>
+              <li><strong>Power simply cut</strong> (battery pulled): the button does not start it. The Pi starts by itself as soon as power returns.</li>
+            </ul>
+            <div class="callout note"><svg class="icon"><use href="#i-note"/></svg><div><span class="ct">For helpers</span><p>Starting from GPIO 3 needs the Pi 4 bootloader settings <code>WAKE_ON_GPIO=1</code> (the default) and <code>POWER_OFF_ON_HALT=0</code>. Check them with <code>vcgencmd bootloader_config</code>.</p></div></div>
+          </section>
+
+          <section class="doc" id="fan" data-group="Hardware &amp; wiring" data-keywords="fan cooling temperature 60 gpio 14 pin 8 hot overheating">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-fan"/></svg></span><h2>Fan</h2></div>
+            <p class="lead">An optional fan on <strong>GPIO 14 (physical pin 8)</strong> switches on by itself from <strong>60 °C</strong>.</p>
+            <p>This is set in the Pi's start-up configuration, not in the console, so there is nothing to switch on there. It became active with the update that added it, after one restart of the Pi.</p>
+            <figure>
+              <div class="fig">
+                <svg viewBox="0 0 320 170" role="img" aria-labelledby="fan-t fan-d" font-family="Inter, system-ui, sans-serif">
+                  <title id="fan-t">Fan wiring, block diagram</title>
+                  <desc id="fan-d">The fan's plus wire goes to 5 volts on pin 4. Its minus wire goes through a switch, for example a transistor module, to GND on pin 6. The switch is controlled by GPIO 14 on pin 8.</desc>
+                  <rect x="8" y="10" width="84" height="40" rx="8" fill="#e05252" fill-opacity=".15" stroke="#e05252" stroke-width="2"/>
+                  <text x="50" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#e6ebf2">5 V</text>
+                  <text x="50" y="43" text-anchor="middle" font-size="11.5" fill="#9aa3b2">pin 4</text>
+                  <rect x="8" y="64" width="84" height="40" rx="8" fill="#4fd1c5" fill-opacity=".14" stroke="#4fd1c5" stroke-width="2"/>
+                  <text x="50" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#e6ebf2">GPIO 14</text>
+                  <text x="50" y="97" text-anchor="middle" font-size="11.5" fill="#9aa3b2">pin 8</text>
+                  <rect x="8" y="118" width="84" height="40" rx="8" fill="#5b6474" fill-opacity=".25" stroke="#8d96a6" stroke-width="2"/>
+                  <text x="50" y="136" text-anchor="middle" font-size="13" font-weight="700" fill="#e6ebf2">GND</text>
+                  <text x="50" y="151" text-anchor="middle" font-size="11.5" fill="#9aa3b2">pin 6</text>
+                  <rect x="128" y="84" width="84" height="54" rx="8" fill="#1b2230" stroke="#9aa3b2" stroke-width="1.5" stroke-dasharray="4 3"/>
+                  <text x="170" y="106" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e6ebf2">switch</text>
+                  <text x="170" y="122" text-anchor="middle" font-size="11" fill="#9aa3b2">e.g. transistor</text>
+                  <path d="M92 84H110V100H128" stroke="#4fd1c5" stroke-width="2.5" fill="none"/>
+                  <path d="M92 138H128" stroke="#8d96a6" stroke-width="2.5" fill="none"/>
+                  <path d="M92 30H262V52" stroke="#e05252" stroke-width="2.5" fill="none"/>
+                  <path d="M212 120H262V112" stroke="#8d96a6" stroke-width="2.5" fill="none"/>
+                  <circle cx="262" cy="82" r="30" fill="#1b2230" stroke="#e6ebf2" stroke-width="2"/>
+                  <g stroke="#e6ebf2" stroke-width="2" fill="none" stroke-linecap="round"><path d="M262 82c-4-10-2-20 6-21 6 0 7 8 2 13"/><path d="M262 82c-4-10-2-20 6-21 6 0 7 8 2 13" transform="rotate(120 262 82)"/><path d="M262 82c-4-10-2-20 6-21 6 0 7 8 2 13" transform="rotate(240 262 82)"/></g>
+                  <text x="300" y="64" font-size="12" font-weight="700" fill="#e6ebf2" text-anchor="middle">fan</text>
+                  <text x="252" y="48" font-size="12" font-weight="700" fill="#e05252" text-anchor="end">+</text>
+                  <text x="252" y="128" font-size="13" font-weight="700" fill="#9aa3b2" text-anchor="end">−</text>
+                </svg>
+              </div>
+              <figcaption>Block diagram only. Pin 8 gives the on/off signal; the fan's own power comes from 5 V.</figcaption>
+            </figure>
+            <div class="callout warn"><svg class="icon"><use href="#i-warn"/></svg><div><p>A GPIO pin can only give the on/off signal; it cannot power a fan by itself. Use a fan or fan board that takes a control signal, or a small switching (transistor) board in between, and follow its instructions.</p></div></div>
+            <p>Is the Pi getting hot? The temperature is on the System tab and in the <a href="#graphs">graphs</a>; 75 °C or more is shown as a warning.</p>
+          </section>
+
+          <!-- ============================== NETWORK ============================== -->
+          <h2 class="group-title" id="group-network">Network &amp; access</h2>
+
+          <section class="doc" id="wifi" data-group="Network &amp; access" data-keywords="wifi wi-fi wlan access point hotspot ssid network name password join existing network scan ungoggled.local ip fallback 5 ghz channel">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-wifi"/></svg></span><h2>Wi-Fi</h2></div>
+            <p class="where">Where: <b>Settings</b> › <b>Wi-Fi access point</b></p>
+            <p class="lead">The Pi makes its own Wi-Fi network, so you can reach the console and spectators can watch. It doesn't need your home or field Wi-Fi at all.</p>
+            <h3 id="wifi-ap">Changing the network name and password</h3>
+            <p>Enter a new <strong>SSID</strong> (network name, up to 32 characters) and a <strong>New password</strong> (8 to 63 characters), then tap <span class="ui">Apply Wi-Fi</span>. The change applies right away, so your phone loses the connection: join the network again with the new name and password. The HDMI picture keeps running meanwhile.</p>
+            <div class="callout warn"><svg class="icon"><use href="#i-warn"/></svg><div><p>A fresh SD card uses <strong>ungoggled</strong> / <strong>ungoggled</strong>, which everyone can look up. Change it before you take the Pi to a busy field. The Pi's own network uses 5 GHz.</p></div></div>
+            <h3 id="wifi-join" data-keywords="join home network client station">Joining an existing Wi-Fi network instead</h3>
+            <p>Useful for a Pi that stays put as a review station at home or at the club.</p>
+            <ol class="steps">
+              <li>Under <strong>Join an existing Wi-Fi network</strong>, tap <span class="ui">Scan for networks</span> and pick one, or type its name.</li>
+              <li>Enter its password (leave it empty for an open network) and join.</li>
+              <li>The Pi switches off its own network and joins that one. Connect your phone to that same network too.</li>
+              <li>Find the Pi at <code>ungoggled.local</code>, or read its address off the HDMI screen.</li>
+            </ol>
+            <div class="callout tip"><svg class="icon"><use href="#i-tip"/></svg><div><span class="ct">Safe to try</span><p>If joining doesn't succeed within 30 seconds, the Pi gives up and brings its own network back by itself. No restart needed.</p></div></div>
+            <h3 id="wifi-always-ap">After a restart</h3>
+            <p><span class="ui">Always broadcast the access point after a reboot</span> decides what happens the next time the Pi starts. <strong>On</strong> (default): it always comes back with its own network, which is what you want for flying. <strong>Off</strong>: it tries to rejoin the network it was last connected to, good for a stationary Pi.</p>
+          </section>
+
+          <section class="doc" id="password" data-group="Network &amp; access" data-keywords="password login signin forgot reset forgotten ssh root lock out locked change reset-password file sd card boot partition">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-lock"/></svg></span><h2>Password</h2></div>
+            <p class="where">Where: <b>Settings</b> › <b>Password</b> (at the bottom)</p>
+            <p class="lead">One password for everything: the console, the Pi's SSH/root login and the terminal.</p>
+            <p>Anyone with this password can control the receiver, change settings and reach your recordings. The first visit to the console asks you to set one, at least 8 characters long; after that your browser stays logged in. Until you set it, the SSH/root login and the terminal use <code>ungoggled</code>, so set yours before you take the Pi anywhere.</p>
+            <p>After an update or a restart of the Pi, everyone has to log in again.</p>
+            <div class="callout tip"><svg class="icon"><use href="#i-tip"/></svg><div><p>The spectator page (<code>/watch.html</code>) is the one exception on purpose: it never asks for the password, so you can share that link without handing over control.</p></div></div>
+            <h3 id="password-change">Changing it</h3>
+            <p>In the Password panel enter the current password once and the new one twice, then <span class="ui">Change password</span>. The SSH/root password changes with it, and all your other phones and computers have to log in again.</p>
+            <h3 id="password-lockout">Too many wrong tries</h3>
+            <p>After 5 wrong passwords in a row, that device is locked out for 5 minutes. Many wrong passwords from different devices slow the login down for everybody.</p>
+            <h3 id="password-reset" data-keywords="forgot forgotten lost reset recover reset-password file">Forgot the password? Reset it with the SD card</h3>
+            <p>Because SSH uses the same password, there's no way back in over the network. Use the SD card instead:</p>
+            <ol class="flow">
+              <li><b>Turn the Pi off</b> and take out the SD card.</li>
+              <li><b>Put the card into a computer.</b> Windows or macOS shows a small drive with files like <code>config.txt</code> on it (the other part of the card can't be opened there, and doesn't need to be).</li>
+              <li><b>Create an empty file named exactly <code>reset-password</code></b> on that small drive: no <code>.txt</code> or any other ending. Windows hides file endings by default, so check the name really has none.</li>
+              <li><b>Eject the card</b>, put it back into the Pi and switch it on.</li>
+              <li class="ok"><b>Done.</b> While starting, the Pi removes the console password, sets SSH/root back to <code>ungoggled</code> and deletes the file. The next visit to the console asks for a new password, like the very first time.</li>
+            </ol>
+            <div class="callout note"><svg class="icon"><use href="#i-note"/></svg><div><p>If the console refuses every login with a message pointing to this reset, the password file on the Pi is damaged. The same reset fixes it.</p></div></div>
+          </section>
+
+          <!-- ============================== SYSTEM ============================== -->
+          <h2 class="group-title" id="group-system">System &amp; upkeep</h2>
+
+          <section class="doc" id="system" data-group="System &amp; upkeep" data-keywords="system clock time date sync reboot restart shut down power off temperature">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-clock"/></svg></span><h2>System &amp; clock</h2></div>
+            <p class="where">Where: <b>System</b> tab › <b>System</b></p>
+            <p class="lead">The Pi's clock, restarting and shutting down safely, and the diagnostics download.</p>
+            <h3 id="clock">The clock</h3>
+            <p>The Pi has no battery-backed clock, so after a power cut it doesn't know the time. <strong>Opening the console sets it from your phone automatically.</strong> <span class="ui">Sync Time</span> does the same by hand. The time matters for the date and time of your recordings and of the log.</p>
+            <h3 id="power-actions">Reboot and shut down</h3>
+            <p><span class="ui">Reboot Pi</span> and <span class="ui">Shut down Pi</span> both ask before they do anything. Shut the Pi down before pulling the power when you can; a <a href="#power-button">power button</a> can do it without the phone.</p>
+            <h3 id="reboot-pending">“Restart the Pi once to finish the last update”</h3>
+            <p>Some updates also improve how the Pi itself starts up, for example keeping the video chip fast enough for large action-cam clips. Those parts only switch on the next time the Pi starts. Until then everything works exactly as before, so there's no rush: restart it when it suits you (never mid-flight) with <span class="ui">Reboot Pi</span>, or it simply happens the next time you power the Pi up. The message goes away once the Pi is back up.</p>
+            <h3 id="download-diagnostics">Download diagnostics</h3>
+            <p>Having a problem? <span class="ui">Download diagnostics</span> gathers the log and system information into one file you can download, even on your phone, and send along when asking for help. Nothing is uploaded anywhere on its own. What's inside: see <a href="#log">Log &amp; diagnostics</a>.</p>
+          </section>
+
+          <section class="doc" id="graphs" data-group="System &amp; upkeep" data-keywords="graphs charts last 30 minutes temperature cpu ram memory bitrate frame rate fps ethernet sd card warning">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-chart"/></svg></span><h2>Graphs (last 30 minutes)</h2></div>
+            <p class="where">Where: <b>System</b> tab · switch groups in <b>Settings</b> › <b>Graphs</b></p>
+            <p class="lead">Small graphs of the last half hour, so you can see what happened during the last flight.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Group</th><th>Shows</th><th>Warning from</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Video</strong></td><td>bitrate, camera and TV frame rate</td><td></td></tr>
+                  <tr><td><strong>Pi health</strong></td><td>temperature, processor, memory</td><td class="num">75 °C · 90 %</td></tr>
+                  <tr><td><strong>Network</strong></td><td>Wi-Fi and Ethernet traffic</td><td class="num">Wi-Fi 40 Mbps</td></tr>
+                  <tr><td><strong>SD card</strong></td><td>card activity</td><td></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>Touch or hover over any graph to read the values at that moment from all of them at once; <span class="ui">Back to now</span> returns to the latest values. Shaded stretches had no live picture. Values past a warning level turn amber and are spelled out at the top. Wi-Fi at 40 Mbps or more is close to what the Pi's radio can carry, which mostly matters with spectators watching.</p>
+            <p><strong>Settings › Graphs</strong> switches whole groups on or off; that choice is remembered on each phone or computer separately. The history lives only in the Pi's memory, so it starts empty after a restart.</p>
+          </section>
+
+          <section class="doc" id="terminal" data-group="System &amp; upkeep" data-keywords="terminal shell command line ssh root linux console keys">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-terminal"/></svg></span><h2>Terminal</h2></div>
+            <p class="where">Where: switch on in <b>Settings</b> › <b>Terminal</b> · open in <b>System</b> › <b>Terminal</b></p>
+            <p class="lead">A command line on the Pi, right in the browser: for troubleshooting together with someone who knows Linux, without SSH.</p>
+            <div class="callout warn"><svg class="icon"><use href="#i-warn"/></svg><div><p>It runs as the Pi's administrator (root), so a wrong command can break the installation. If you don't know what a command does, don't run it.</p></div></div>
+            <h3 id="terminal-on">Switching it on</h3>
+            <p>It's off until you switch it on in Settings › Terminal. Switching it off again closes an open terminal immediately.</p>
+            <h3 id="terminal-limits">Safety limits</h3>
+            <ul>
+              <li>Every time you open it, it asks for the password again, even though you're logged in. Wrong guesses count towards the same lock-out as the login page.</li>
+              <li>Only one terminal can be open at a time.</li>
+              <li>It closes after 10 minutes without typing, after 30 minutes at most, and when you log out; on most phones also a minute after you switch away from it. Anything still running in it is stopped.</li>
+            </ul>
+            <h3 id="terminal-phone">On a phone</h3>
+            <p>The row of keys under the terminal adds what a phone keyboard lacks: Esc, Tab, Ctrl (tap it, then the letter), the arrow keys and a few symbols; A− and A+ change the text size. The buttons above run a few harmless look-up commands, like the service log or free disk space.</p>
+          </section>
+
+          <section class="doc" id="updates" data-group="System &amp; upkeep" data-keywords="update upgrade new version release install rollback roll back health check versions switch version what's new changelog update.tar.gz">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-update"/></svg></span><h2>Software updates</h2></div>
+            <p class="where">Where: <b>System</b> tab › <b>Software update</b> and <b>Installed versions</b></p>
+            <p class="lead">Updates come through your phone. If a new version doesn't start properly, the Pi goes back to the old one by itself.</p>
+            <h3 id="updates-check">Checking for a new version</h3>
+            <p>The line at the top says whether your phone can reach the update server right now: <strong>green</strong> means it can; <strong>amber</strong> means it can't (often because the phone is on the Pi's Wi-Fi without mobile data). It's checked automatically when you open the System tab; <span class="ui">Check for updates</span> checks again and <span class="ui">Release notes</span> shows what's new before you download anything.</p>
+            <p>The download uses your phone's own mobile data, not the Pi, so it works out in the field. Once downloaded, install it right away or keep it ready to install later.</p>
+            <h3 id="updates-file">Installing from a file</h3>
+            <p>No connection? Get the release's <code>.update.tar.gz</code> file (smaller than 64 MiB) onto your phone or computer, choose it in the Software update panel or drag and drop it there. The video pauses during installation; settings that still fit the new version are kept.</p>
+            <h3 id="updates-safety">What happens during an update</h3>
+            <ol class="flow">
+              <li><b>File checked.</b> The Pi makes sure the file is a complete, valid update.</li>
+              <li><b>Settings backed up, new version installed.</b> The picture pauses for a moment.</li>
+              <li><b>Health check.</b> The new version has to prove itself on the HDMI screen.
+                <div class="branch">
+                  <div class="yes"><span class="lbl">Passes</span>The new version is kept.</div>
+                  <div class="no"><span class="lbl">Fails</span>The previous version comes back automatically, with its settings. Nothing stays broken.</div>
+                </div>
+              </li>
+            </ol>
+            <h3 id="updates-retry">An update rolled back and offers to skip the health check</h3>
+            <p>Occasionally the check itself is wrong although the new version looked fine on the HDMI screen; this has happened before. When a rollback happens for exactly that reason, a <span class="ui">Retry without the health check</span> button appears. It installs the update again without that automatic check. It is only offered in that situation, never for a broken download or a real problem.</p>
+            <h3 id="versions">Installed versions: going back</h3>
+            <p>The SD card keeps the active version, the one before it, one older update and the version from the SD-card image. <span class="ui">Switch version</span> uses the same safe procedure as an update: settings are backed up and the previous state returns automatically if the version does not start.</p>
+            <p>Some updates need one restart to finish; see <a href="#reboot-pending">Restart the Pi once</a>.</p>
+            <h3 id="whats-new">What's new so far</h3>
+            <ul class="news">
+              <li>WebUI Rework — a cleaner, more modern look throughout</li>
+              <li>Recording, with an automatic "save every flight" option and a crash buffer like the goggles' own instant-replay</li>
+              <li>Spectator stream (experimental) — bystanders can watch the live feed on their own phone</li>
+              <li>USB — ActionCam Video Player (experimental) — browse and play videos from a USB drive or action camera on the screen</li>
+              <li>Wi-Fi: join an existing network instead of only broadcasting the Pi's own, with an automatic fallback back to its own network if the join doesn't work out</li>
+              <li>Goggles 2 support (experimental)</li>
+              <li>Original DJI FPV Goggles (V1/V2) support (experimental)</li>
+              <li>A loopable fallback video or image while waiting for the goggles' signal</li>
+              <li>HTTPS, so the web interface can be installed as a real fullscreen app on a phone</li>
+              <li>New logo, background and three selectable waiting-screen videos for the HDMI output, plus an icon on every button</li>
+              <li>This help wiki</li>
+              <li>A password on the control interface, and a "retry without the health check" option if an update ever rolls back for the wrong reason</li>
+              <li>USB video player: shows how smoothly a clip plays, and big action-camera clips (like the DJI Action 2 in 4K) no longer turn the picture black</li>
+              <li>Switches to stretch the live picture and USB videos to fill the whole screen (Settings → HDMI)</li>
+              <li>The picture comes back by itself after the monitor was switched off and on again</li>
+              <li>Pulling out the action camera while a clip plays now stops the player by itself and brings the idle screen back</li>
+              <li>4K at 60 Hz on the first HDMI port (the one next to the USB-C port), and a little smoother playback of big clips; needs one restart after the update</li>
+              <li>A fan on GPIO 14 now switches on from 60 °C by itself (also after that restart)</li>
+              <li>The log is kept for 30 days across power cuts (with much more detail about the goggles), and up to four extra buttons on GPIO pins can shut down, reboot, save a clip, record or run a script</li>
+              <li>Choose the goggles type in Settings: Automatic, Goggles 3, Goggles 2 or FPV Goggles V1/V2</li>
+              <li>A new help center with search, a Raspberry Pi pin diagram and wiring examples</li>
+              <li>Goggles that showed a picture once are never sent the other generation's start sequence again</li>
+              <li>One password for everything: the control password is now also the Pi's SSH/root password (until you set one, both are still <code>ungoggled</code>); and a way back in if you forget it</li>
+              <li>The spectator page works on the Pi's own Wi-Fi without internet; USB sticks are only opened as FAT, exFAT or NTFS</li>
+              <li>Older phones show the console again instead of "Disconnected"; two devices no longer undo each other's settings; deleting a recording asks first</li>
+              <li>Long flights are saved in parts, big recordings download without filling the Pi's memory, and several smaller fixes (Wi-Fi scan, power-button pin, USB plug-in freeze, 4K60 safety)</li>
+            </ul>
+          </section>
+
+          <section class="doc" id="log" data-group="System &amp; upkeep" data-keywords="log logs journal diagnostics support bundle journalctl what happened error debug 30 days 100 mb">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-log"/></svg></span><h2>Log &amp; diagnostics <span class="tag new">new</span></h2></div>
+            <p class="where">Where: <b>System</b> tab › <span class="ui">Download diagnostics</span></p>
+            <p class="lead">The Pi writes down what happens, so a problem can be understood after the flight, even after the battery was pulled.</p>
+            <h3 id="log-kept">How long it is kept</h3>
+            <p>The log is kept on the SD card for <strong>30 days</strong>, also across restarts and power cuts. It never grows past <strong>100 MB</strong>: the oldest part is dropped first, so it can't fill the card.</p>
+            <h3 id="log-bundle">What's in the diagnostics download</h3>
+            <ul>
+              <li>the receiver's log (everything that is kept),</li>
+              <li>the Pi's own messages: USB events, under-voltage, SD-card errors,</li>
+              <li>the list of starts (boots) of the Pi,</li>
+              <li>which way each pair of goggles was remembered with,</li>
+              <li>the USB state.</li>
+            </ul>
+            <div class="callout example"><svg class="icon"><use href="#i-example"/></svg><div><span class="ct">Example</span><p>The picture froze during the third flight. At home, open the console, tap <span class="ui">Download diagnostics</span> and send the file to whoever helps you. It still shows when the goggles connected, which way they used, and when the picture stopped.</p></div></div>
+            <h3 id="log-search" data-keywords="goggles protocol status phase usb_state power thermal heartbeat duml under-voltage overheating">What to look for</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Search for</th><th>Tells you</th></tr></thead>
+                <tbody>
+                  <tr><td><code>Goggles protocol:</code></td><td>which way the goggles were started, and how many seconds after the start the first picture came</td></tr>
+                  <tr><td><code>status phase:</code></td><td>when the picture started and stopped</td></tr>
+                  <tr><td><code>usb_state:</code></td><td>the goggles' USB connection</td></tr>
+                  <tr><td><code>power/thermal:</code></td><td>under-voltage (weak power supply) or overheating</td></tr>
+                  <tr><td><code>heartbeat:</code></td><td>a one-line summary every minute while goggles are attached</td></tr>
+                  <tr><td><code>DUML</code></td><td>the first message of each kind the goggles send</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="callout warn"><svg class="icon"><use href="#i-warn"/></svg><div><span class="ct">Times</span><p>The times in the log are only right once the clock was set (<code>clock synced: true</code>), because the Pi has no battery clock. Opening the console sets it.</p></div></div>
+            <h3 id="log-commands">On the Pi itself (for helpers)</h3>
+            <p>Over SSH or in the <a href="#terminal">terminal</a>:</p>
+            <pre><code>journalctl -u dji-hdmi              # everything kept, oldest first
+journalctl -u dji-hdmi -b -1        # the start before this one
+journalctl _TRANSPORT=kernel        # the Pi's own messages</code></pre>
+          </section>
+
+          <!-- ============================== HELP ============================== -->
+          <h2 class="group-title" id="group-help">Help</h2>
+
+          <section class="doc" id="troubleshooting" data-group="Help" data-keywords="problem problems faq fix not working broken issue help error">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-help"/></svg></span><h2>Troubleshooting</h2></div>
+            <p class="lead">Symptom → cause → fix. Tap a question to open it.</p>
+
+            <details class="faq" id="faq-no-picture" data-keywords="no picture black screen nothing on tv no video waiting for goggles">
+              <summary>No picture on the screen</summary>
+              <div class="faq-body"><dl>
+                <dt>Check first</dt><dd>On the Live tab, look at the <strong>Goggles input</strong> box.</dd>
+                <dt>“Nothing powering the accessory port”</dt><dd>The Pi doesn't see the goggles on USB-C. Check that the cable goes into the Pi's <strong>USB-C</strong> port, that it is a data cable, and that the goggles are on. FPV Goggles V1/V2 belong in a <strong>USB-A</strong> port, with the goggles type set to V1/V2.</dd>
+                <dt>“Waiting for camera”</dt><dd>The goggles are connected but no video arrives yet. Make sure the drone/air unit is on and the goggles themselves show a picture.</dd>
+                <dt>Still nothing</dt><dd>Tap <span class="ui">Reconnect goggles</span>. Then see <a href="#faq-goggles-not-found">Goggles not found</a>.</dd>
+                <dt>The HDMI output box says no display</dt><dd>Check the micro-HDMI cable and that the screen is on and set to the right input. Use <strong>HDMI0</strong>, next to the USB-C port.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-goggles-not-found" data-keywords="goggles not found not detected automatic type protocol">
+              <summary>Goggles are not found</summary>
+              <div class="faq-body"><dl>
+                <dt>Cause</dt><dd>Automatic tries the Goggles 3 way first and switches only after a few seconds without a picture. FPV Goggles V1/V2 are never found by Automatic.</dd>
+                <dt>Fix</dt><dd>Pick your goggles' type in <strong>Settings › Goggles</strong> (<a href="#goggles">details</a>). The receiver restarts and the goggles connect again within a few seconds. If it still doesn't work, <a href="#log">download diagnostics</a> and look for <code>Goggles protocol:</code>.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-4k-black" data-keywords="4k black screen after mode change resolution hdmi">
+              <summary>Black screen after choosing a 4K mode</summary>
+              <div class="faq-body"><dl>
+                <dt>Cause</dt><dd>4K at 60 Hz works only on HDMI0 (next to the USB-C port) with a high-speed HDMI 2.0 cable.</dd>
+                <dt>Fix</dt><dd>Choose <strong>Automatic</strong> under Settings › HDMI and tap Apply. If the picture does not come back, restart the Pi (System › <span class="ui">Reboot Pi</span>).</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-black-bars" data-keywords="black bars sides 4:3 stretch aspect">
+              <summary>Black bars at the sides of the picture</summary>
+              <div class="faq-body"><dl>
+                <dt>Cause</dt><dd>The picture is 4:3 and the screen 16:9; it is shown in its own shape.</dd>
+                <dt>Fix</dt><dd>Switch on <span class="ui">Stretch the live picture to fill the screen</span> (or the USB one) under <a href="#hdmi-stretch">Settings › HDMI</a>.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-login" data-keywords="cannot log in login fails wrong password forgot locked out">
+              <summary>I can't log in</summary>
+              <div class="faq-body"><dl>
+                <dt>Forgot the password</dt><dd>Reset it with an empty file named <code>reset-password</code> on the SD card: <a href="#password-reset">step by step</a>.</dd>
+                <dt>“Locked”</dt><dd>After 5 wrong passwords in a row the device is locked out for 5 minutes. Wait, then try again.</dd>
+                <dt>Every login is refused with a hint about the reset</dt><dd>The password file is damaged; the <a href="#password-reset">same reset</a> fixes it.</dd>
+                <dt>Logged out suddenly</dt><dd>Normal after an update, a restart of the Pi, or a password change on another device.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-cant-reach" data-keywords="cannot reach console disconnected address not loading 192.168.50.1 ungoggled.local">
+              <summary>The console doesn't open or says “Disconnected”</summary>
+              <div class="faq-body"><dl>
+                <dt>Check</dt><dd>Is your phone on the Pi's Wi-Fi? Some phones leave a Wi-Fi without internet; tell the phone to stay connected. Then open <code>http://192.168.50.1</code>.</dd>
+                <dt>The Pi joined another network</dt><dd>Its own network is off then. Connect your phone to that network and open <code>ungoggled.local</code>, or read the Pi's address off the HDMI screen. If joining failed, the Pi's own network comes back after about 30 seconds.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-stutter" data-keywords="stutter stuttering choppy lag slow jerky frame rate hot under-voltage">
+              <summary>The picture stutters or a USB video plays slowly</summary>
+              <div class="faq-body"><dl>
+                <dt>USB videos</dt><dd>Very large action-camera clips are more than the Pi can decode in real time and play in smooth slow motion. The speed line under the time bar shows how slow (1.00× is real time).</dd>
+                <dt>Live picture</dt><dd>Look at the <a href="#graphs">graphs</a>: camera vs. TV frame rate, temperature (warning from 75 °C). In the <a href="#log">log</a>, <code>power/thermal:</code> lines mean under-voltage (power supply too weak) or overheating.</dd>
+                <dt>Good to know</dt><dd>A 60 Hz HDMI signal with a 30 fps camera picture is normal, not a fault. The spectator stream never affects the HDMI picture or your flight.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-usb-drive" data-keywords="usb drive stick not shown not detected camera no videos format exfat ntfs ext4">
+              <summary>My USB drive or camera isn't shown</summary>
+              <div class="faq-body"><dl>
+                <dt>Port</dt><dd>Use a <strong>USB-A</strong> port, not the USB-C port of the goggles.</dd>
+                <dt>Format</dt><dd>Only FAT/FAT32, exFAT and NTFS drives are opened. A drive formatted as ext4, for example, is ignored.</dd>
+                <dt>Files</dt><dd>Only video files are listed (<code>.mp4</code>, <code>.mov</code>, <code>.mkv</code>, <code>.avi</code>, <code>.m4v</code>, <code>.insv</code>, <code>.lrv</code>). A drive that couldn't be opened is retried every 30 seconds.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-button-start" data-keywords="power button does not start pi wake gpio 3 boot">
+              <summary>The Pi doesn't start with the button</summary>
+              <div class="faq-body"><dl>
+                <dt>Right pins?</dt><dd>Only <strong>physical pin 5</strong> (GPIO 3) with <strong>pin 6</strong> (GND) can start the Pi. Another GPIO can shut it down, but not start it. See the <a href="#gpio-not-pin">pin-number mix-up</a>.</dd>
+                <dt>Shut down or power cut?</dt><dd>The button starts a Pi that was <strong>shut down properly</strong>. After the power was simply cut, the Pi starts by itself when power returns.</dd>
+                <dt>For helpers</dt><dd><code>vcgencmd bootloader_config</code> must show <code>WAKE_ON_GPIO=1</code> and <code>POWER_OFF_ON_HALT=0</code>.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-button-nothing" data-keywords="button does nothing not working extra button shutdown button gpio wrong pin">
+              <summary>A button does nothing</summary>
+              <div class="faq-body"><dl>
+                <dt>GPIO vs. pin number</dt><dd>The console wants the <strong>GPIO</strong> number. Look the pin up in the <a href="#gpio-table">pin table</a>.</dd>
+                <dt>Hold time</dt><dd>Shut down and reboot start with a 2-second hold. Keep the button pressed long enough, or set a shorter hold.</dd>
+                <dt>Wiring</dt><dd>The button must connect the GPIO pin to a <strong>GND</strong> pin, and be a momentary switch.</dd>
+                <dt>Still nothing</dt><dd>Every press is in the <a href="#log">log</a>, with the reason when nothing happened (for example: an update is being installed, no clip to save yet, a script failed).</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-beeper" data-keywords="beeper silent no sound buzzer test">
+              <summary>The beeper stays silent</summary>
+              <div class="faq-body"><dl>
+                <dt>Fix</dt><dd>Check that <span class="ui">Piezo beeper on GPIO</span> is switched on with the right GPIO number (default 6 = pin 31) and applied. Then tap <span class="ui">Test buzzer</span>; it only works after Apply. Use a passive piezo between the GPIO pin and GND (<a href="#wiring-piezo">wiring</a>).</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-pin-error" data-keywords="error gpio number between 2 and 27 pins must all be different">
+              <summary>“Pin must be a GPIO number between 2 and 27” or “GPIO pins must all be different”</summary>
+              <div class="faq-body"><dl>
+                <dt>Cause</dt><dd>You typed a physical pin number (like 31 or 40), or two parts share a pin.</dd>
+                <dt>Fix</dt><dd>Type the GPIO number from the <a href="#gpio-table">pin table</a>, and give every part its own pin.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-sd-full" data-keywords="storage full recording stopped sd card full space">
+              <summary>“Storage is full; recording stopped”</summary>
+              <div class="faq-body"><dl>
+                <dt>Cause</dt><dd>Less than 2 GB is free on the SD card.</dd>
+                <dt>Fix</dt><dd>Delete recordings under Videos, then dismiss the message. For long sessions, <a href="#rec-where">record to a USB drive</a>.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-wrong-time" data-keywords="wrong time date recordings 1970 clock timestamps">
+              <summary>Recordings or the log have the wrong date or time</summary>
+              <div class="faq-body"><dl>
+                <dt>Cause</dt><dd>The Pi has no battery clock and doesn't know the time after a power cut.</dd>
+                <dt>Fix</dt><dd>Open the console once after switching on: it sets the clock from your phone. Switch on <span class="ui">Beep every 5 seconds until the clock is synced</span> as a reminder.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-update-rolled-back" data-keywords="update failed rolled back old version back health check">
+              <summary>An update went back to the old version</summary>
+              <div class="faq-body"><dl>
+                <dt>Cause</dt><dd>The new version didn't pass its health check on the HDMI screen, so the previous one came back. Nothing is broken.</dd>
+                <dt>Fix</dt><dd>If the new version actually looked fine, use <span class="ui">Retry without the health check</span> when it is offered (<a href="#updates-retry">details</a>). Otherwise send the <a href="#log">diagnostics</a> to whoever helps you.</dd>
+              </dl></div>
+            </details>
+
+            <details class="faq" id="faq-no-internet" data-keywords="no internet warning certificate not private connection advanced proceed">
+              <summary>“No internet” or “Your connection isn't private”</summary>
+              <div class="faq-body"><dl>
+                <dt>Both are expected</dt><dd>The Pi's Wi-Fi has no internet on purpose. The certificate warning appears because the Pi makes its own certificate: tap <span class="ui">Advanced</span>, then <span class="ui">Proceed</span>. To get rid of it for good on Android, see <a href="#install-trust">trusting the certificate</a>.</dd>
+              </dl></div>
+            </details>
+          </section>
+
+          <section class="doc" id="glossary" data-group="Help" data-keywords="glossary terms words meaning cheat sheet keyboard shortcuts tips defaults">
+            <div class="doc-head"><span class="icon-badge"><svg class="icon"><use href="#i-book"/></svg></span><h2>Glossary &amp; tips</h2></div>
+            <h3 id="cheat-sheet">Cheat sheet</h3>
+            <div class="table-wrap">
+              <table>
+                <tbody>
+                  <tr><td><strong>Console address</strong></td><td><code>http://192.168.50.1</code> · <code>ungoggled.local</code></td></tr>
+                  <tr><td><strong>Wi-Fi (fresh card)</strong></td><td><code>ungoggled</code> / <code>ungoggled</code></td></tr>
+                  <tr><td><strong>SSH (until a password is set)</strong></td><td><code>root</code> / <code>ungoggled</code></td></tr>
+                  <tr><td><strong>Spectator page</strong></td><td><code>/watch.html</code> (no password)</td></tr>
+                  <tr><td><strong>Goggles 2/3</strong></td><td>Pi USB-C · <strong>V1/V2</strong>: USB-A</td></tr>
+                  <tr><td><strong>Screen</strong></td><td>HDMI0, next to USB-C</td></tr>
+                  <tr><td><strong>Reset password</strong></td><td>empty file <code>reset-password</code> on the SD card's boot drive</td></tr>
+                  <tr><td><strong>Power button</strong></td><td>pin 5 (GPIO 3) + pin 6 (GND)</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3 id="terms">Words used in this help</h3>
+            <dl class="terms">
+              <dt>GPIO / BCM number</dt><dd>The name of a pin as the Pi's chip counts them (“GPIO 17”). This is what the console wants.</dd>
+              <dt>Physical pin number</dt><dd>The position on the 40-pin header, 1 to 40, counted from pin 1 (the square pad).</dd>
+              <dt>GND (ground)</dt><dd>The Pi's 0 V. Every button, LED and beeper has one wire to a GND pin. All GND pins are the same.</dd>
+              <dt>3.3 V / 5 V</dt><dd>Power pins. GPIO pins work with 3.3 V; never connect 5 V to a GPIO pin.</dd>
+              <dt>Momentary switch</dt><dd>A push button that springs back when released.</dd>
+              <dt>Pull-up</dt><dd>The Pi keeps a button pin “high” inside, so a press to GND is all it takes; no resistor needed.</dd>
+              <dt>Series resistor</dt><dd>The small resistor in line with an LED that limits its current (for example about 330 Ω).</dd>
+              <dt>Passive piezo</dt><dd>A thin disc that beeps when the Pi switches its pin on and off quickly.</dd>
+              <dt>Hold time</dt><dd>How long a button must be held before its action runs (tap, 1, 2, 3 or 5 s).</dd>
+              <dt>HDMI0</dt><dd>The micro-HDMI port next to the USB-C port; the only one that does 4K at 60 Hz.</dd>
+              <dt>Access point</dt><dd>The Pi's own Wi-Fi network.</dd>
+              <dt>SSID</dt><dd>The name of a Wi-Fi network.</dd>
+              <dt>Self-signed certificate</dt><dd>The Pi's own HTTPS certificate. Browsers warn about it once; it is safe to proceed on the Pi's Wi-Fi.</dd>
+              <dt>Idle screen</dt><dd>What the screen shows while there is no live picture.</dd>
+              <dt>Crash buffer</dt><dd>The last 30 seconds, kept in the background and saved when the signal drops.</dd>
+              <dt>Health check</dt><dd>After an update, the new version must show it works on the HDMI screen, or the old one comes back.</dd>
+              <dt>Rollback</dt><dd>Going back to the previous version automatically.</dd>
+              <dt>Diagnostics</dt><dd>A download with the log and system information, for asking for help.</dd>
+            </dl>
+            <h3 id="tips" data-keywords="keyboard shortcut slash ctrl k search phone tips">Tips for this help</h3>
+            <ul>
+              <li>Press <kbd>/</kbd> or <kbd>Ctrl</kbd> + <kbd>K</kbd> to search; <kbd>↑</kbd> <kbd>↓</kbd> pick a result, <kbd>Enter</kbd> opens it, <kbd>Esc</kbd> closes.</li>
+              <li>On a phone, the magnifier at the top opens the search, the ☰ button the list of topics.</li>
+              <li>Each chapter has its own address, for example <code>/wiki.html#gpio-pinout</code>, to send to a friend.</li>
+              <li>This help is stored on the Pi and works on its Wi-Fi without internet.</li>
+            </ul>
+          </section>
+
+          <footer class="page-foot" data-noindex>
+            <p><span class="wordmark" style="font-size:16px"><span class="un">un</span>goggled</span> · DJI goggles video on any HDMI screen, with a Raspberry Pi 4</p>
+            <a class="to-top" href="#start">Back to the top</a>
+          </footer>
+        </div>
       </main>
+
+      <aside class="toc" id="toc" aria-label="On this page"></aside>
     </div>
+
+    <dialog class="search" id="search" aria-label="Search the help">
+      <div class="search-bar">
+        <svg class="icon"><use href="#i-search"/></svg>
+        <input id="search-input" type="search" placeholder="Search the help…" autocomplete="off" autocapitalize="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list" aria-label="Search the help" enterkeyhint="go" />
+        <button class="icon-btn" id="search-close" type="button" aria-label="Close search"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="search-body">
+        <div id="search-popular">
+          <h3>Popular topics</h3>
+          <div class="chips">
+            <a href="#gpio-pinout">Pin diagram</a>
+            <a href="#extra-buttons">Extra buttons</a>
+            <a href="#power-button">Power button</a>
+            <a href="#goggles">Goggles type</a>
+            <a href="#wifi">Wi-Fi</a>
+            <a href="#password-reset">Reset password</a>
+            <a href="#hdmi-4k">4K at 60 Hz</a>
+            <a href="#recording">Recording</a>
+            <a href="#updates">Updates</a>
+            <a href="#log">Log &amp; diagnostics</a>
+            <a href="#troubleshooting">Troubleshooting</a>
+          </div>
+        </div>
+        <div id="search-empty" class="search-empty" hidden>
+          <p>Nothing found for “<strong id="search-empty-q"></strong>”. Check the spelling, try a shorter word, or start from one of these:</p>
+          <div class="chips">
+            <a href="#troubleshooting">Troubleshooting</a>
+            <a href="#gpio-pinout">Pin diagram</a>
+            <a href="#connect">Connect &amp; first start</a>
+            <a href="#glossary">Glossary</a>
+          </div>
+        </div>
+        <ul class="results" id="search-results" role="listbox" aria-label="Search results" hidden></ul>
+      </div>
+      <div class="search-foot" aria-hidden="true"><span><kbd>↑</kbd> <kbd>↓</kbd> choose</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
+      <p class="sr-only" id="search-status" role="status" aria-live="polite"></p>
+    </dialog>
   </body>
 </html>

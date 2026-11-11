@@ -186,7 +186,7 @@ export function TerminalSettings({
 }: {
   disabled: boolean;
   settings: Settings | null;
-  onSave: (next: Settings) => Promise<void>;
+  onSave: (patch: Partial<Settings>) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -196,7 +196,7 @@ export function TerminalSettings({
     setBusy(true);
     setError("");
     try {
-      await onSave({ ...settings, terminal_enabled });
+      await onSave({ terminal_enabled });
       setConfirming(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

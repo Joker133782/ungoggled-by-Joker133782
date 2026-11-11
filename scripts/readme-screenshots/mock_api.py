@@ -72,6 +72,7 @@ def jpeg(frame: str, width: int) -> bytes:
 
 def settings() -> dict:
     return {
+        "goggles": "auto",
         "hdmi_mode": "auto",
         "hdmi_connector": None,
         "fallback_image": "default-loop.h264",
@@ -82,6 +83,7 @@ def settings() -> dict:
         "video_led_pin": 23,
         "hdmi_led_pin": 24,
         "beep_until_time_synced": False,
+        "buttons": [],
         "stream_enabled": True,
         "stream_quality": "high",
         "auto_record": True,
@@ -264,8 +266,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
-        if length:
-            self.rfile.read(length)
+        body = self.rfile.read(length) if length else b""
+        if urlparse(self.path).path == "/api/auth/change-password":
+            # The documented default is the mock's "current" password.
+            try:
+                p = json.loads(body or b"{}")
+            except ValueError:
+                p = {}
+            if len(str(p.get("new", ""))) < 8:
+                return self.json({"error": "Use at least 8 characters"}, 400)
+            if p.get("current") != "ungoggled":
+                return self.json({"error": "Current password is wrong"}, 401)
+            return self.json({"ok": True})
         self.json({"ok": True, "message": "ok"})
 
     do_DELETE = do_POST

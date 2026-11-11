@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, headers, usePolling } from "../api";
+import { api, headers, usePolling, withTimeout } from "../api";
 import type {
   Recording,
   RecordingStatus,
@@ -7,6 +7,7 @@ import type {
   UsbVideoStatus,
 } from "../types";
 import { PanelHead } from "./PanelHead";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
   IconRecord,
   IconClose,
@@ -55,25 +56,14 @@ export function RecordingControls({
   disabled: boolean;
   settings: Settings | null;
 }) {
-  const [status, setStatus] = useState<RecordingStatus | null>(null);
+  // A failed poll keeps the last status (the receiver may be restarting);
+  // the next one retries.
+  const { value: status } = usePolling<RecordingStatus>("recording", 2000);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   // The saved file lands on the Videos tab, out of sight from here, so say
   // so instead of leaving the button press without any visible result.
   const [saved, setSaved] = useState("");
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        setStatus(await api<RecordingStatus>("recording"));
-      } catch {
-        /* Receiver may be restarting; the next tick retries. */
-      }
-      timer = setTimeout(poll, 2000);
-    };
-    void poll();
-    return () => clearTimeout(timer);
-  }, []);
   useEffect(() => {
     if (!saved) return;
     const timer = setTimeout(() => setSaved(""), 10000);
@@ -130,7 +120,7 @@ export function RecordingControls({
       <PanelHead icon={<IconRecord />} title="Recording" wiki="recording" />
       {diskWarning && (
         <p role="alert" className="error">
-          SD card is full; recording stopped. Delete some recordings under{" "}
+          Storage is full; recording stopped. Delete some recordings under{" "}
           <a href="#videos">Videos</a>, then{" "}
           <button disabled={disabled} onClick={() => void dismissWarning()}>
             <IconClose /> dismiss
@@ -190,7 +180,7 @@ export function RecordingSettings({
 }: {
   disabled: boolean;
   settings: Settings | null;
-  onSave: (next: Settings) => Promise<void>;
+  onSave: (patch: Partial<Settings>) => Promise<void>;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -205,7 +195,7 @@ export function RecordingSettings({
     setBusy("auto");
     setError("");
     try {
-      await onSave({ ...settings, auto_record });
+      await onSave({ auto_record });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
     } finally {
@@ -217,7 +207,7 @@ export function RecordingSettings({
     setBusy("crash");
     setError("");
     try {
-      await onSave({ ...settings, crash_buffer });
+      await onSave({ crash_buffer });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
     } finally {
@@ -229,7 +219,7 @@ export function RecordingSettings({
     setBusy("record_to_usb");
     setError("");
     try {
-      await onSave({ ...settings, record_to_usb });
+      await onSave({ record_to_usb });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
     } finally {
@@ -298,19 +288,48 @@ export function RecordingSettings({
  */
 export function RecordingList({ disabled }: { disabled: boolean }) {
   const [recordings, setRecordings] = useState<Recording[] | null>(null);
+  const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState<Recording | null>(null);
 
-  const loadList = useCallback(async () => {
+  const loadList = useCallback(async (parent: AbortSignal | null = null) => {
+    const request = withTimeout(parent, 8000);
     try {
-      const r = await api<{ recordings: Recording[] }>("recordings");
+      const r = await api<{ recordings: Recording[] }>("recordings", {
+        signal: request.signal,
+      });
+      if (parent?.aborted) return;
       setRecordings(r.recordings);
-    } catch {
-      /* Receiver may be restarting; the next poll retries. */
+      setLoadError("");
+    } catch (e) {
+      // Shown only while there's no list yet; a list already on screen
+      // stays, and the next reload retries.
+      if (!parent?.aborted)
+        setLoadError(
+          e instanceof Error ? e.message : "Could not load recordings.",
+        );
+    } finally {
+      request.done();
     }
   }, []);
+  // Recordings appear (auto-record, crash buffer) and disappear (rotation)
+  // on their own, so the list reloads while it's on screen.
   useEffect(() => {
-    void loadList();
+    const abort = new AbortController();
+    void loadList(abort.signal);
+    const timer = setInterval(() => {
+      if (!document.hidden) void loadList(abort.signal);
+    }, 10000);
+    const onVisible = () => {
+      if (!document.hidden) void loadList(abort.signal);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      abort.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [loadList]);
 
   async function play(name: string) {
@@ -332,6 +351,7 @@ export function RecordingList({ disabled }: { disabled: boolean }) {
       setError(e instanceof Error ? e.message : "Could not delete recording.");
     } finally {
       setBusy(null);
+      setDeleting(null);
     }
   }
 
@@ -343,6 +363,15 @@ export function RecordingList({ disabled }: { disabled: boolean }) {
           {error}
         </p>
       )}
+      {!recordings &&
+        (loadError ? (
+          <p role="alert" className="error">
+            Could not load the recordings: {loadError}{" "}
+            <button onClick={() => void loadList()}>Retry</button>
+          </p>
+        ) : (
+          <p className="status-line">Loading…</p>
+        ))}
       {recordings && recordings.length === 0 && (
         <p className="help">No recordings yet.</p>
       )}
@@ -382,7 +411,7 @@ export function RecordingList({ disabled }: { disabled: boolean }) {
                 </a>
                 <button
                   disabled={disabled || busy === r.name}
-                  onClick={() => void remove(r.name)}
+                  onClick={() => setDeleting(r)}
                 >
                   <IconTrash /> Delete
                 </button>
@@ -391,6 +420,15 @@ export function RecordingList({ disabled }: { disabled: boolean }) {
           ))}
         </ul>
       )}
+      <ConfirmDialog
+        open={deleting !== null}
+        busy={deleting !== null && busy === deleting.name}
+        title={`Delete “${deleting?.name ?? ""}”?`}
+        body="The file is removed from the Pi (or from the USB drive it was recorded to) and cannot be restored."
+        confirmLabel="Delete"
+        onCancel={() => setDeleting(null)}
+        onConfirm={() => deleting && void remove(deleting.name)}
+      />
     </section>
   );
 }

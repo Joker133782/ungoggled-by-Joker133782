@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Settings, Wifi, WifiClient, WifiNetwork } from "../types";
-import { api, headers, usePolling } from "../api";
+import { api, headers, usePolling, withTimeout } from "../api";
 import { PanelHead } from "./PanelHead";
 import { IconWifi, IconCheck, IconClose } from "./icons";
 export function WifiPanel({
@@ -12,7 +12,7 @@ export function WifiPanel({
   notify: (s: string) => void;
   disabled?: boolean;
   settings: Settings | null;
-  onSave: (next: Settings) => Promise<void>;
+  onSave: (patch: Partial<Settings>) => Promise<void>;
 }) {
   const { value: wifi } = usePolling<Wifi>("wifi", 5000);
   const { value: client } = usePolling<WifiClient>("wifi/client", 3000);
@@ -31,14 +31,16 @@ export function WifiPanel({
   async function scan() {
     setScanBusy(true);
     setError("");
+    const request = withTimeout(null, 15000);
     try {
       const r = await api<{ networks: WifiNetwork[] }>("wifi/scan", {
-        signal: AbortSignal.timeout(15000),
+        signal: request.signal,
       });
       setNetworks(r.networks);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Scan failed.");
     } finally {
+      request.done();
       setScanBusy(false);
     }
   }
@@ -50,7 +52,7 @@ export function WifiPanel({
     setAlwaysApBusy(true);
     setError("");
     try {
-      await onSave({ ...settings, wifi_always_ap });
+      await onSave({ wifi_always_ap });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
     } finally {
@@ -229,11 +231,9 @@ export function WifiPanel({
                 </button>
               </div>
               <p className="help">
-                Switches off the access point above and joins this network
-                instead. Reconnect from a device already on that network — look
-                for this Pi at <code>ungoggled.local</code> or read its IP off
-                the HDMI screen. Falls back to the access point on its own if
-                the join doesn&apos;t succeed within 30 seconds.
+                Turns the access point off. Find the Pi at{" "}
+                <code>ungoggled.local</code> or on the HDMI screen. Falls back
+                after 30 s.
               </p>
             </form>
           )}

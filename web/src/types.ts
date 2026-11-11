@@ -34,13 +34,15 @@ export type Status = {
   goggles_led_error?: string | null;
   video_led_error?: string | null;
   hdmi_led_error?: string | null;
+  buttons_error?: string | null;
   time_unix_ms?: number;
   time?: string;
   timezone?: string;
   time_synced?: boolean;
   fallback_video?: boolean;
+  goggles_mode?: string;
   goggles_protocol?: "goggles3" | "goggles2";
-  goggles_protocol_state?: "probing" | "video" | "forced";
+  goggles_protocol_state?: "probing" | "video" | "forced" | "remembered";
   disk_warning?: boolean;
   /** An update changed boot settings that only take effect after a reboot. */
   reboot_required?: boolean;
@@ -50,7 +52,22 @@ export type HdmiConnector = {
   name: string;
   connected: boolean;
 };
+export type ButtonAction =
+  | "shutdown"
+  | "reboot"
+  | "save_clip"
+  | "toggle_recording"
+  | "restart_receiver"
+  | "script";
+export type GpioButton = {
+  pin: number;
+  action: ButtonAction;
+  hold_ms: number;
+  script: string | null;
+};
+export type GogglesMode = "auto" | "goggles3" | "goggles2" | "v1v2";
 export type Settings = {
+  goggles: GogglesMode;
   hdmi_mode: string;
   hdmi_connector: number | null;
   fallback_image: string | null;
@@ -61,6 +78,7 @@ export type Settings = {
   video_led_pin: number | null;
   hdmi_led_pin: number | null;
   beep_until_time_synced: boolean;
+  buttons: GpioButton[];
   stream_enabled: boolean;
   stream_quality: string;
   auto_record: boolean;

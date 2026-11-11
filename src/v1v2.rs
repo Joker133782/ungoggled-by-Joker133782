@@ -26,7 +26,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Vendor and product ID voc-poc uses for both V1 and V2; DJI has not
@@ -36,6 +36,48 @@ const PRODUCT_ID: u16 = 0x1f;
 /// The bulk interface carrying the video stream, per voc-poc.
 const INTERFACE: u8 = 3;
 const MAGIC: [u8; 4] = [0x52, 0x4d, 0x56, 0x54];
+/// No bytes for this long: send the start packet again (every this often).
+const RESEND_AFTER: Duration = Duration::from_secs(10);
+/// No bytes for this long: let the supervisor start over (claim, start packet).
+const RECONNECT_AFTER: Duration = Duration::from_secs(90);
+
+#[derive(Debug, PartialEq)]
+enum Silence {
+    Wait,
+    Resend,
+    Reconnect,
+}
+/// Watches the goggles' bulk IN endpoint for a stream that just stops (the
+/// air unit unlinked, the goggles forgot the start packet) without any USB
+/// error, which would otherwise leave the receiver reading nothing forever.
+struct Stall {
+    last_data: Instant,
+    last_resend: Instant,
+}
+impl Stall {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_data: now,
+            last_resend: now,
+        }
+    }
+    fn data(&mut self, now: Instant) {
+        self.last_data = now;
+        self.last_resend = now;
+    }
+    fn silent(&mut self, now: Instant) -> Silence {
+        if now.duration_since(self.last_data) >= RECONNECT_AFTER {
+            Silence::Reconnect
+        } else if now.duration_since(self.last_data) >= RESEND_AFTER
+            && now.duration_since(self.last_resend) >= RESEND_AFTER
+        {
+            self.last_resend = now;
+            Silence::Resend
+        } else {
+            Silence::Wait
+        }
+    }
+}
 
 fn event(value: serde_json::Value) {
     println!("{value}");
@@ -88,19 +130,23 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
 
     event(json!({"phase":"usb_connected"}));
 
+    eprintln!("V1/V2 goggles found; bulk OUT 0x{out_addr:02x}, bulk IN 0x{in_addr:02x}");
     let mut writer = interface
         .endpoint::<Bulk, Out>(out_addr)
         .context("Cannot open bulk OUT endpoint")?
-        .writer(4096);
+        .writer(4096)
+        .with_write_timeout(Duration::from_secs(5));
     writer
         .write_all(&MAGIC)
         .context("Cannot send magic packet")?;
     writer.flush().context("Cannot flush magic packet")?;
+    eprintln!("V1/V2 start packet sent");
 
     let mut reader = interface
         .endpoint::<Bulk, In>(in_addr)
         .context("Cannot open bulk IN endpoint")?
-        .reader(16384);
+        .reader(16384)
+        .with_read_timeout(Duration::from_secs(1));
 
     event(json!({"phase":"waiting_video"}));
 
@@ -123,6 +169,8 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
         }
     });
     let mut buffer = vec![0u8; 16384];
+    let mut stall = Stall::new(Instant::now());
+    let mut got_any = false;
     loop {
         let n = match reader.read(&mut buffer) {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -130,10 +178,37 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
                 thread::sleep(Duration::from_millis(2));
                 continue;
             }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                match stall.silent(Instant::now()) {
+                    Silence::Wait => {}
+                    Silence::Resend => {
+                        eprintln!(
+                            "V1/V2: no data for {}s; sending the start packet again",
+                            RESEND_AFTER.as_secs()
+                        );
+                        writer
+                            .write_all(&MAGIC)
+                            .and_then(|()| writer.flush())
+                            .context("Cannot send the start packet again")?;
+                    }
+                    Silence::Reconnect => {
+                        anyhow::bail!(
+                            "No data from the goggles for {} s; reconnecting",
+                            RECONNECT_AFTER.as_secs()
+                        );
+                    }
+                }
+                continue;
+            }
             result => result.context("Read goggles USB bulk IN")?,
         };
         if n == 0 {
             continue;
+        }
+        stall.data(Instant::now());
+        if !got_any {
+            got_any = true;
+            eprintln!("V1/V2: first data from the goggles");
         }
         total.fetch_add(n as u64, Ordering::Relaxed);
         video.send(buffer[..n].to_vec());
@@ -157,6 +232,22 @@ mod tests {
 
     fn endpoint(address: u8, attributes: u8) -> [u8; 7] {
         [7, 5, address, attributes, 0, 2, 0]
+    }
+
+    #[test]
+    fn a_silent_stream_gets_the_start_packet_again_and_then_a_reconnect() {
+        let t = Instant::now();
+        let mut s = Stall::new(t);
+        let at = |secs: u64| t + Duration::from_secs(secs);
+        assert_eq!(s.silent(at(3)), Silence::Wait);
+        assert_eq!(s.silent(at(10)), Silence::Resend);
+        assert_eq!(s.silent(at(11)), Silence::Wait, "not again at once");
+        assert_eq!(s.silent(at(20)), Silence::Resend);
+        // Data resets everything.
+        s.data(at(25));
+        assert_eq!(s.silent(at(34)), Silence::Wait);
+        assert_eq!(s.silent(at(35)), Silence::Resend);
+        assert_eq!(s.silent(at(25 + 90)), Silence::Reconnect);
     }
 
     #[test]

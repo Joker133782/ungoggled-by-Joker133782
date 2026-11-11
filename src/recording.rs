@@ -9,11 +9,12 @@
 //! keeping the 5 most recent, as soon as the feed drops).
 use serde_json::{Value, json};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    thread::JoinHandle,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -37,10 +38,24 @@ struct Active {
     started: Instant,
     bytes: u64,
 }
-/// A flight currently being buffered in RAM (tmpfs), not yet on the SD card.
+/// A flight (or one part of a long one) currently being buffered in RAM
+/// (tmpfs), not yet on the SD card.
+///
+/// The tmpfs is a fraction of the Pi's RAM and also holds mpv's socket, the
+/// thumbnails and GStreamer's registry, while a flight can easily be a
+/// gigabyte: so a part ends at `cap` bytes, is saved on its own, and the
+/// flight goes on in the next part (`flight-<stamp>-2.h264`, ...).
 struct AutoRecording {
     file: File,
     tmp_path: PathBuf,
+    /// The start of the flight (its first part), shared by all its parts.
+    stamp: u128,
+    part: u32,
+    bytes: u64,
+    cap: u64,
+    /// A write failed (the tmpfs is full): the part is saved as far as it
+    /// got and the next one is started.
+    failed: bool,
 }
 #[derive(Default)]
 struct Buffer {
@@ -84,11 +99,17 @@ struct Inner {
     /// Whether live input was flowing as of the last `crash_tick` call, to
     /// detect the drop that should trigger an auto-save.
     crash_was_live: bool,
+    /// Replaces the part size derived from the free tmpfs space (tests).
+    cap_override: Option<u64>,
 }
 
 #[derive(Clone)]
 pub struct Controller {
     inner: Arc<Mutex<Inner>>,
+    /// Saves to the SD card or a USB drive run on their own threads: a flight
+    /// is hundreds of MB, and copying it must neither stall the video loop
+    /// nor hold the lock that `feed` and the status request need.
+    saving: Arc<Mutex<Vec<JoinHandle<()>>>>,
     /// Under the runtime directory (tmpfs): gone on every reboot or power
     /// loss, so cached thumbnails never accumulate on the SD card.
     thumb_dir: PathBuf,
@@ -98,7 +119,30 @@ impl Controller {
         let _ = fs::create_dir_all(&thumb_dir);
         Self {
             inner: Arc::new(Mutex::new(Inner::default())),
+            saving: Arc::new(Mutex::new(Vec::new())),
             thumb_dir,
+        }
+    }
+    fn save_in_background(&self, job: impl FnOnce() + Send + 'static) {
+        let handle = std::thread::spawn(job);
+        let mut saving = self
+            .saving
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        saving.retain(|h| !h.is_finished());
+        saving.push(handle);
+    }
+    /// Waits until every save started so far has finished (at shutdown, so
+    /// the service is not stopped half way through copying a flight).
+    pub fn wait_for_saves(&self) {
+        let handles: Vec<_> = self
+            .saving
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect();
+        for handle in handles {
+            let _ = handle.join();
         }
     }
     /// Start a new continuous recording. Fails without creating a file if
@@ -150,35 +194,71 @@ impl Controller {
         {
             active.bytes += nal.len() as u64;
         }
-        if let Some(auto) = &mut inner.auto {
-            let _ = auto.file.write_all(nal);
+        if let Some(auto) = &mut inner.auto
+            && !auto.failed
+        {
+            match auto.file.write_all(nal) {
+                Ok(()) => auto.bytes += nal.len() as u64,
+                Err(_) => auto.failed = true,
+            }
         }
     }
     /// Keep auto-recording in sync with whether live input is currently
     /// flowing, when the `auto_record` setting is on: starts buffering a
     /// flight in `tmp_dir` (tmpfs) when input appears, and saves it to
     /// `sd_dir` (pruned to the most recent `MAX_FLIGHTS`) as soon as input
-    /// stops. Cheap to call every tick either way.
-    pub fn auto_tick(&self, tmp_dir: &Path, sd_dir: &Path, enabled: bool, input_live: bool) {
-        let mut inner = self.inner.lock().unwrap();
-        if !enabled {
-            if let Some(auto) = inner.auto.take() {
-                finalize_flight(auto, sd_dir);
-            }
-            return;
-        }
-        match (inner.auto.is_some(), input_live) {
-            (false, true) => {
-                if let Ok(auto) = start_auto_recording(tmp_dir) {
+    /// stops. A part that has grown to its size limit is saved meanwhile and
+    /// the flight goes on in a new one. Cheap to call every tick either way;
+    /// the saving itself runs on another thread (see `wait_for_saves`).
+    /// Returns something the owner should be told, if there is.
+    pub fn auto_tick(
+        &self,
+        tmp_dir: &Path,
+        sd_dir: &Path,
+        enabled: bool,
+        input_live: bool,
+    ) -> Option<String> {
+        let mut message = None;
+        let finished = {
+            let mut inner = self.inner.lock().unwrap();
+            let mut finished = Vec::new();
+            if !enabled || !input_live {
+                finished.extend(inner.auto.take());
+            } else {
+                if inner
+                    .auto
+                    .as_ref()
+                    .is_some_and(|a| a.failed || a.bytes >= a.cap)
+                {
+                    let old = inner.auto.take().unwrap();
+                    if old.failed {
+                        message = Some(
+                            "Flight recording: the temporary memory is full or not writable; \
+                             the flight is saved in parts"
+                                .to_owned(),
+                        );
+                    }
+                    inner.auto = start_auto_recording(
+                        tmp_dir,
+                        Some((old.stamp, old.part + 1)),
+                        inner.cap_override,
+                    )
+                    .ok();
+                    finished.push(old);
+                }
+                if inner.auto.is_none()
+                    && let Ok(auto) = start_auto_recording(tmp_dir, None, inner.cap_override)
+                {
                     inner.auto = Some(auto);
                 }
             }
-            (true, false) => {
-                let auto = inner.auto.take().unwrap();
-                finalize_flight(auto, sd_dir);
-            }
-            _ => {}
+            finished
+        };
+        for auto in finished {
+            let sd_dir = sd_dir.to_path_buf();
+            self.save_in_background(move || finalize_flight(auto, &sd_dir));
         }
+        message
     }
     /// Keep the crash buffer in sync with live input, when the
     /// `crash_buffer` setting is on. The ~30 s ring buffer itself always
@@ -194,7 +274,10 @@ impl Controller {
             just_dropped.then(|| inner.buffer.snapshot()).flatten()
         };
         if let Some(bytes) = snapshot {
-            let _ = save_crash_clip(dir, &bytes);
+            let dir = dir.to_path_buf();
+            self.save_in_background(move || {
+                let _ = save_crash_clip(&dir, &bytes);
+            });
         }
     }
     /// Check free space while a recording is active; stop it and return a
@@ -262,38 +345,92 @@ impl Controller {
     }
 }
 
-/// Create a new tmpfs scratch file for a flight about to start.
-fn start_auto_recording(tmp_dir: &Path) -> std::io::Result<AutoRecording> {
-    fs::create_dir_all(tmp_dir)?;
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let tmp_path = tmp_dir.join(format!("flight-{stamp}.h264"));
-    let file = File::create(&tmp_path)?;
-    Ok(AutoRecording { file, tmp_path })
+/// How much of the free tmpfs space one part may take: a third, so the part
+/// being written and one still being copied away both fit with room to spare.
+fn part_cap(dir: &Path) -> u64 {
+    const MIB: u64 = 1024 * 1024;
+    free_bytes(dir).map_or(64 * MIB, |free| (free / 3).clamp(8 * MIB, 256 * MIB))
 }
-/// Copy a finished flight from the tmpfs scratch file to the SD card and
-/// prune older flights beyond `MAX_FLIGHTS`; always removes the scratch
-/// file, whether or not the copy succeeded.
+/// Create a new tmpfs scratch file: for a flight about to start, or (`next`:
+/// the flight's stamp and the part number) for its next part.
+fn start_auto_recording(
+    tmp_dir: &Path,
+    next: Option<(u128, u32)>,
+    cap_override: Option<u64>,
+) -> std::io::Result<AutoRecording> {
+    fs::create_dir_all(tmp_dir)?;
+    let (stamp, part) = next.unwrap_or_else(|| {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        (stamp, 1)
+    });
+    let name = if part == 1 {
+        format!("flight-{stamp}.h264")
+    } else {
+        format!("flight-{stamp}-{part}.h264")
+    };
+    let tmp_path = tmp_dir.join(name);
+    let file = File::create(&tmp_path)?;
+    Ok(AutoRecording {
+        file,
+        tmp_path,
+        stamp,
+        part,
+        bytes: 0,
+        cap: cap_override.unwrap_or_else(|| part_cap(tmp_dir)),
+        failed: false,
+    })
+}
+/// Copy a finished flight (part) from the tmpfs scratch file to the SD card
+/// and prune older flights beyond `MAX_FLIGHTS`; always removes the scratch
+/// file, whether or not the copy succeeded. The copy goes to a name that is
+/// not a recording until it is complete, so a copy that is cut short (the
+/// power, a service stop) never looks like a finished file.
 fn finalize_flight(auto: AutoRecording, sd_dir: &Path) {
-    drop(auto.file);
-    if fs::create_dir_all(sd_dir).is_ok() {
-        let name = auto
-            .tmp_path
-            .file_name()
-            .map(|n| sd_dir.join(n))
-            .filter(|_| fs::metadata(&auto.tmp_path).is_ok_and(|m| m.len() > 0));
-        if let Some(dest) = name
-            && fs::copy(&auto.tmp_path, &dest).is_ok()
-        {
+    let AutoRecording { file, tmp_path, .. } = auto;
+    drop(file);
+    let name = tmp_path
+        .file_name()
+        .map(PathBuf::from)
+        .filter(|_| fs::metadata(&tmp_path).is_ok_and(|m| m.len() > 0));
+    if let Some(name) = name
+        && fs::create_dir_all(sd_dir).is_ok()
+    {
+        let dest = sd_dir.join(&name);
+        let mut unfinished = dest.clone().into_os_string();
+        unfinished.push(".part");
+        let unfinished = PathBuf::from(unfinished);
+        if fs::copy(&tmp_path, &unfinished).is_ok() && fs::rename(&unfinished, &dest).is_ok() {
             prune_flights(sd_dir);
+        } else {
+            let _ = fs::remove_file(&unfinished);
         }
     }
-    let _ = fs::remove_file(&auto.tmp_path);
+    let _ = fs::remove_file(&tmp_path);
 }
+/// Keeps the files of the `MAX_FLIGHTS` most recent flights (all parts of a
+/// flight count as one) and deletes the rest.
 fn prune_flights(dir: &Path) {
-    prune_by_prefix(dir, "flight-", MAX_FLIGHTS);
+    let mut flights: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(rest) = name
+            .strip_prefix("flight-")
+            .filter(|_| name.ends_with(".h264"))
+        else {
+            continue;
+        };
+        let stamp = rest.split(['-', '.']).next().unwrap_or_default();
+        flights.entry(stamp.to_owned()).or_default().push(name);
+    }
+    // Nanosecond stamps sort chronologically as strings.
+    for stamp in flights.keys().rev().skip(MAX_FLIGHTS) {
+        for name in &flights[stamp] {
+            let _ = fs::remove_file(dir.join(name));
+        }
+    }
 }
 
 /// Save a crash-buffer snapshot as its own file and prune older ones beyond
@@ -447,6 +584,7 @@ mod tests {
         assert!(c.list(&sd).is_empty(), "still in tmp, not yet on sd_dir");
         // Feed drops: the flight is saved to sd_dir.
         c.auto_tick(&tmp, &sd, true, false);
+        c.wait_for_saves();
         let listed = c.list(&sd);
         assert_eq!(listed.len(), 1);
         let name = listed[0]["name"].as_str().unwrap().to_owned();
@@ -473,12 +611,14 @@ mod tests {
         c.crash_tick(&dir, true, true);
         c.feed(&[0, 0, 1, 0x65, 3, 4]);
         c.crash_tick(&dir, true, false);
+        c.wait_for_saves();
         let listed = c.list(&dir);
         assert_eq!(listed.len(), 1);
         let name = listed[0]["name"].as_str().unwrap().to_owned();
         assert!(name.starts_with("crash-"));
         // Staying dropped must not save again.
         c.crash_tick(&dir, true, false);
+        c.wait_for_saves();
         assert_eq!(c.list(&dir).len(), 1);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -491,6 +631,7 @@ mod tests {
             c.crash_tick(&dir, true, true);
             c.feed(&[0, 0, 1, 0x67, i as u8]);
             c.crash_tick(&dir, true, false);
+            c.wait_for_saves();
         }
         let listed = c.list(&dir);
         assert_eq!(listed.len(), MAX_CRASH_CLIPS);
@@ -506,10 +647,158 @@ mod tests {
             c.auto_tick(&tmp, &sd, true, true);
             c.feed(&[0, 0, 1, 0x67, i as u8]);
             c.auto_tick(&tmp, &sd, true, false);
+            c.wait_for_saves();
+            // Flight names are nanosecond timestamps: keep them distinct.
+            std::thread::sleep(Duration::from_millis(2));
         }
         let listed = c.list(&sd);
         assert_eq!(listed.len(), MAX_FLIGHTS);
         fs::remove_dir_all(&sd).unwrap();
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    fn sps(tag: u8, filler: usize) -> Vec<u8> {
+        let mut nal = vec![0, 0, 1, 0x67, tag];
+        nal.extend(std::iter::repeat_n(0xab, filler));
+        nal
+    }
+
+    #[test]
+    fn a_long_flight_is_saved_in_parts_that_follow_each_other() {
+        let (c, sd) = test_controller("parts");
+        let tmp = scratch("parts-tmp");
+        c.inner.lock().unwrap().cap_override = Some(40);
+        c.auto_tick(&tmp, &sd, true, true);
+        let first = sps(1, 20);
+        let second = sps(2, 20);
+        let third = sps(3, 5);
+        c.feed(&first);
+        c.feed(&second);
+        // The first part is full: the next tick saves it and carries on.
+        c.auto_tick(&tmp, &sd, true, true);
+        c.feed(&third);
+        c.auto_tick(&tmp, &sd, true, false);
+        c.wait_for_saves();
+        let mut names: Vec<String> = c
+            .list(&sd)
+            .iter()
+            .map(|r| r["name"].as_str().unwrap().to_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 2, "{names:?}");
+        let (one, two) = if names[0].contains("-2.") {
+            (&names[1], &names[0])
+        } else {
+            (&names[0], &names[1])
+        };
+        assert!(valid_name(one) && valid_name(two));
+        assert_eq!(
+            one.trim_end_matches(".h264"),
+            two.trim_end_matches("-2.h264"),
+            "same flight"
+        );
+        assert_eq!(fs::read(sd.join(one)).unwrap(), [first, second].concat());
+        assert_eq!(fs::read(sd.join(two)).unwrap(), third);
+        assert!(fs::read_dir(&tmp).unwrap().next().is_none(), "scratch gone");
+        fs::remove_dir_all(&sd).unwrap();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn all_parts_of_a_flight_count_as_one_when_pruning() {
+        let dir = scratch("prune-parts");
+        fs::create_dir_all(&dir).unwrap();
+        for stamp in 100..100 + (MAX_FLIGHTS as u32 + 2) {
+            fs::write(dir.join(format!("flight-{stamp}.h264")), b"x").unwrap();
+            fs::write(dir.join(format!("flight-{stamp}-2.h264")), b"x").unwrap();
+            fs::write(dir.join(format!("flight-{stamp}-3.h264")), b"x").unwrap();
+        }
+        fs::write(dir.join("recording-1.h264"), b"x").unwrap();
+        prune_flights(&dir);
+        let mut left: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left.len(), MAX_FLIGHTS * 3 + 1, "{left:?}");
+        assert!(left.contains(&"recording-1.h264".to_owned()));
+        assert!(left.contains(&format!("flight-{}-3.h264", 100 + MAX_FLIGHTS as u32 + 1)));
+        assert!(!left.contains(&"flight-100.h264".to_owned()));
+        assert!(!left.contains(&"flight-101-2.h264".to_owned()));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_full_scratch_disk_ends_the_part_and_says_so() {
+        let (c, sd) = test_controller("full");
+        let tmp = scratch("full-tmp");
+        fs::create_dir_all(&tmp).unwrap();
+        // /dev/full accepts the open and fails every write with ENOSPC, like
+        // a full tmpfs.
+        let broken = AutoRecording {
+            file: fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap(),
+            tmp_path: tmp.join("flight-5.h264"),
+            stamp: 5,
+            part: 1,
+            bytes: 0,
+            cap: u64::MAX,
+            failed: false,
+        };
+        fs::write(&broken.tmp_path, b"first part so far").unwrap();
+        c.inner.lock().unwrap().auto = Some(broken);
+        c.feed(&sps(1, 10));
+        let message = c.auto_tick(&tmp, &sd, true, true);
+        assert!(message.is_some_and(|m| m.contains("saved in parts")));
+        c.auto_tick(&tmp, &sd, true, false);
+        c.wait_for_saves();
+        let saved: Vec<_> = c.list(&sd);
+        assert_eq!(saved.len(), 1, "what the first part held is kept");
+        assert_eq!(
+            fs::read(sd.join(saved[0]["name"].as_str().unwrap())).unwrap(),
+            b"first part so far"
+        );
+        fs::remove_dir_all(&sd).unwrap();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_copy_that_is_not_finished_never_looks_like_a_recording() {
+        let (c, sd) = test_controller("unfinished");
+        let tmp = scratch("unfinished-tmp");
+        fs::create_dir_all(&tmp).unwrap();
+        // A destination that cannot be written: the copy fails half way.
+        let auto = start_auto_recording(&tmp, None, Some(1 << 20)).unwrap();
+        let mut file = auto.file.try_clone().unwrap();
+        file.write_all(&sps(1, 10)).unwrap();
+        fs::create_dir_all(&sd).unwrap();
+        let name = auto.tmp_path.file_name().unwrap().to_owned();
+        // A directory in the way of the final name makes the rename fail.
+        fs::create_dir_all(sd.join(&name)).unwrap();
+        finalize_flight(auto, &sd);
+        let mut leftovers: Vec<String> = fs::read_dir(&sd)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        leftovers.sort();
+        assert_eq!(leftovers, [name.to_string_lossy().into_owned()]);
+        assert!(fs::read_dir(&tmp).unwrap().next().is_none());
+        assert!(
+            c.list(&sd)
+                .iter()
+                .all(|r| !r["name"].as_str().unwrap().ends_with(".part"))
+        );
+        fs::remove_dir_all(&sd).unwrap();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn waiting_for_saves_with_nothing_pending_returns_at_once() {
+        let (c, _dir) = test_controller("idle-wait");
+        c.wait_for_saves();
     }
 }

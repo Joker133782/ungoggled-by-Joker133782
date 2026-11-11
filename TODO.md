@@ -1,5 +1,84 @@
 # TODO
 
+- [x] **2026-11-11 (evening): UI hints shortened + new wiki.** User: "nicht so extrem viele Erklaerungstexte in der WebUI ... kurze knappe praegnante Erklaerungen", wiki with a Pi 4B pin picture, "das Ungoggled CI nicht im Wiki", Opus subagent for "Wiki UI, Aufbau, Suche ... Beispiele, Grafiken". Done: all UI help texts >200 chars shortened (App HDMI, AuthGate, Goggles, Hardware x3 incl. links to `#gpio-pinout` / `#extra-buttons`, IdleScreen, Password, SoftwareUpdate x2, Versions, Wifi; originals saved for the wiki). Opus rebuilt `web/public/wiki.html` (146 KB) + `wiki/wiki.css` + `wiki/wiki.js` (about 206 KB, no bitmaps, offline): 24 chapters, search with typo tolerance, drawer nav, pin diagram + 40-pin table, wiring sketches, panel drawings, 17 troubleshooting questions, glossary. I verified: no external URLs/requests, 40/40 pins vs the canonical header map, all UI-linked anchors exist, no horizontal scroll at 360 px, anchors land under the sticky header, search finds "gpoi" -> GPIO. Fixes by me: the "real mix-up" story (the colleague's pins) was my guess, now a hypothetical "typical mix-up"; label overlap in the power-button drawing; search snippet spacing; two "What's new" bullets. Open: owner should check the fan drawing (block diagram: 5 V pin 4, switch/transistor, GND pin 6, control pin 8); links from the console to `#log` / `#troubleshooting` / `#hdmi-4k` are not added yet. SSH to the test Pi no longer works with `ungoggled` (the owner logged in, password sync), so the package has to be installed through the web UI (System -> software update).
+- [x] **2026-11-11: Part 4 findings + logging + GPIO buttons implemented in 0.3.52 (not released, not committed).** User: "OK, dann setz mal um. Vor allem auch das logging ... Umlaufprotokollierung auf 30 Tage ... Scripte wie shutdown etc. fuer GPIO momentary switches" (a friend's wish).
+      Done: (G1) `session.rs`: goggles with exactly one remembered protocol are pinned (never probed with the other one, state `remembered`), unknown ones back off (Goggles 3 phase 8 s doubling to 120 s; `remembered_bonus` removed), 3 new tests; (G4) `gadget.rs` compares with `args.control_port`; (G5) `v1v2.rs` read timeout 1 s, start packet again after 10 s of silence, reconnect after 90 s (`Stall`); (G6) `video.rs` caches SPS/PPS, a decoder may start at an IDR picture (first slice) with them; (G9/logging) new `src/diag.rs` (Watcher = status changes + messages rate-limited, Heartbeat = usb_state/hdmi/clock/throttled + a summary every minute while goggles are attached, ControlLog = first DUML packet of every kind instead of the first 30), worker start/exit lines, FunctionFS disable/suspend/resume, banner at start; (FINDINGS.MD) garbled paragraph restored from git history (commit 019ba59).
+      **Log persistence (overrules the image's old `Storage=volatile`)**: `scripts/prepare-pi.sh` writes `/etc/systemd/journald.conf.d/dji-hdmi.conf` (Storage=persistent, SystemMaxUse=100M, SystemMaxFileSize=8M, MaxFileSec=1day, MaxRetentionSec=30day) if it differs, restarts journald and flushes; `provision-image.sh` writes the same; a unit test keeps both scripts equal. Support bundle: 30000 lines of the service log, kernel log across boots, boot list, `goggles.txt` (memory file + UDC state), throttled/date/uptime. Measured before: ~116 service lines in 18 h idle, journal 5.4 MB volatile.
+      **GPIO buttons**: `Settings.buttons` (max 4: pin, action shutdown|reboot|save_clip|toggle_recording|restart_receiver|script, hold_ms 0..10000, script file name), validated in `save()` and `migrate()`, pins distinct from LEDs/beeper/power button; `hardware.rs` `PressTracker::holding`, `ExtraButton`, `run_script` (`/var/lib/dji-hdmi/button-scripts/<name>`, must be executable, `timeout 60`, cwd = data dir); `App::run_button` in main.rs (ensure_idle for power/restart); web: HardwarePanel rows (pin, action, hold, script name), CSS, types, mock_api, wiki + USER-GUIDE + GOGGLES.md + CHANGELOG. GPIO 3 wakes a halted Pi 4 (documented). Tests: 207 passed, clippy/fmt clean.
+      **Tested on the test Pi 2026-11-11** (final package `flash-images/ungoggled-0.3.52.update.tar.gz`, build 0.3.52-6b4a8f649ffb, sha256 6ee23059...d209, installed with `update-install` = the real worker, "succeeded"): journald switched itself to persistent at the update (stdout stream survived the restart inside ExecStartPre), second install does not repeat it, log survived a reboot (`--list-boots` shows both boots); simulated button presses with `pinctrl` 10/10 (tap, hold 2 s, no repeat, blip ignored, non-executable script, record toggle); throwaway-instance API test 21/21 (buttons saved/refused, support bundle with all new entries); UI checked in the mock (rows, defaults, validation).
+      **Later the same day (user: "mach noch ein Auswahlfeld fuer die Goggles Wahl")**: `Settings.goggles` (auto|goggles3|goggles2|v1v2, default auto), first panel of the Settings tab (`GogglesPanel.tsx`), wiki article `goggles`; a change bumps `app.restart`; `goggles_mode(setting, system)` in main.rs: a fixed UI choice wins, `auto` leaves `UNGOGGLED_GOGGLES` from /etc/default/dji-hdmi in charge (status field `goggles_mode`). Also "Add power button (GPIO 3)" preset (shutdown, hold 2 s). Pi 4 wake from halt: bootloader `WAKE_ON_GPIO=1`, `POWER_OFF_ON_HALT=0` verified on the test Pi (firmware does the starting, no software); the colleague's "GPIO 5 & 6" is most likely physical pins 5 (GPIO3) and 6 (GND). Final package sha256 dad0d187...1919, build 0.3.52-6b2bd85e5ebd, installed on the test Pi; selector end-to-end test with a throwaway instance 11/11 (harness lesson: `pkill -f tt-data` kills its own shell and left the real service running; use a pid file).
+      Still to check on hardware: Goggles tests from `review-part4-goggles-fable.md`, a real switch on a free GPIO, the real GPIO 3 wake. Known nit: `diag::Watcher` drops an identical message within 10 s, so the second "FunctionFS ready for goggles" after a quick worker restart is not logged (the worker-started line is). Not done: UI selector for the goggles protocol (env var `UNGOGGLED_GOGGLES` only), G2/G3/G7/G8.
+- [ ] **Code review part 2 (video/display, system_fixes, USB protocol; Fable subagent, 2026-11-10): report `H:/Claude Code/flash-images/review-part2-core-fable.md`; no critical/high, 5 medium, 14 low; verified in the code, nothing changed yet.**
+      Confirmed: V1 (video.rs ~915: a stretched live decoder that dies before its first frame for ANY reason latches `stretch_rejected` until reconnect),
+      V2 (recording.rs `finalize_flight` copies the whole flight on the render thread under the recording lock; cut by TimeoutStopSec=5), V3 = R6 (unbounded
+      tmpfs flight file, ignored write errors), V4 (storage.rs `reconcile` holds the `mounted` lock across `mount`/`umount` without timeout while the
+      render loop takes it every tick when `record_to_usb` is on), S1 (my 4kp60 line is added without checking for a foreign `hevc_freq` /
+      `over_voltage_delta`: the combination killed the firmware on 2026-11-07 -> add a guard), V7 (receive thread ends on EINTR -> dead screen while the service
+      runs; one-line fix + make the end of the render thread fatal). Low: V5, V6, V8-V10, S2-S7, P1 (Pi clock sent to the air unit even if never
+      synced), P2. Parts 3-4 (web UI, remaining files, build scripts) not reviewed. Fix plan = the 0.3.52 bundle together with part 1.
+- [ ] **Code review part 1 (security, by a Fable subagent, 2026-11-10/11): report in `H:/Claude Code/flash-images/review-part1-security-fable.md`; I verified the findings against the code,
+      nothing is changed yet.** Confirmed: S1 sshd root login with the published default password and no firewall (biggest, needs a product decision),
+      S2 session cookie without `Secure` (TLS on), S3 update install/rollback need only the session (no password step-up like the terminal),
+      S4 lockout per IP only + 8-char minimum only in the frontend, S5 first-visit setup claimable + non-atomic, S6 no fd limit / spectator cap,
+      S7 USB mount without `-t`, R1 power-button pin that reads low powers the Pi off at every start, R2 `auth.json` written non-atomically (a bad file
+      = restart loop), R3 recording download reads the whole file into RAM, R4 `wifi_busy` stuck if a scan request is cancelled, R5 blocking nmcli /
+      mutex on async threads, R6 auto-record unbounded in tmpfs + ignored write errors, R7 lockout counter never decays. Low relevance: S8, S9 (no
+      other users on the Pi), S10. Plan: quick safe fixes as 0.3.52 (R2, R4, R3, R5, R1, S2, S4, S5, R7), decisions needed for S1, S3, S7;
+      parts 2-4 of the review (video/storage, system_fixes, web UI) not started.
+- [x] **0.3.51 RELEASED 2026-11-10 (update only): 4Kp60 + fan in the managed config block (user: fan for updates too).** Nextcloud: update + .sha256 (public download verified), `latest.json` (3 notes: 4K60, fan, the 0.3.50 unplug fix; previous file `flash-images/latest.json.0.3.50-backup`); committed `6c523ee` and pushed to the fork. Still 0.3.49: the flash image and the GitHub release/README buttons. Details of the work: 2026-11-10: HDMI hint added (Automatic = 1080p, 4K60 needs HDMI0 + high-speed cable, black picture -> choose Automatic / restart), package rebuilt (sha256 c91fb3d6...e80d) and re-installed on the test Pi.**
+      (1) Ship `hdmi_enable_4kp60=1`: the user re-tested it on the test Pi, a few more fps when playing and the
+      Acer is now offered at 60 Hz; this overrules the 2026-11-07 "do not ship" below. Still open: the
+      2026-11-07 finding that 3840x2160@60 through mpv blanked the monitor (only a reboot recovered), so ask what
+      the user actually selected before deciding whether 4K60 modes stay in the web UI's mode list. Add it to the
+      managed block in `src/system_fixes.rs::edit_config` (respect an existing line), reboot check in `pending()`,
+      tests, release notes say "restart the Pi once". Never with `hevc_freq` >= 600 (firmware dead).
+      (2) Fan: the app has no fan code; the user wants it in the boot config the raspi-config way (Performance
+      Options -> P4 Fan -> GPIO 14 -> temperature), i.e. `dtoverlay=gpio-fan,gpiopin=14,temp=60000` (60 C) as the
+      default. Verify the param names in `/boot/firmware/overlays/README` and any existing line in the test Pi's
+      config.txt first; respect a line the user already has; confirm whether updates or only new images get it.
+      Memory: ungoggled-open-work-2026-11-09.
+- [ ] **Unplugging the action cam during USB playback (field report from the user's colleague,
+      2026-11-08), fix written, unit-tested AND confirmed on the test Pi with the real Action 2 (2026-11-08); RELEASED as 0.3.50 (update only, no flash image) on 2026-11-08.**
+      Symptom: screen falls back to the Linux console, the web UI shows no drive but still the
+      player and the clip list; Stop brings the idle screen back. Cause (from reading the code, not
+      reproduced): mpv (`--idle=yes`) lets go of the display when its file can no longer be read,
+      while the render loop keeps standing aside for `current_usb`. Fix: `video.rs::usb_end` ends the
+      playback like Stop when the clip file is gone, mpv exits, reaches EOF or reports `idle-active`
+      twice in a row (after a 3 s start-up grace); `UsbPlayer::drop` waits at most 3 s for mpv;
+      `storage.rs`: `umount -l` fallback for a drive that is really gone (a busy plain umount left a
+      dead mount behind), `resolve` refuses vanished files; `UsbVideos.tsx` hides the clip list while
+      no drive is detected. Also fixed: the `embedded_module_matches_the_pinned_kernel_and_build_info`
+      test had been failing since the patch text was edited (BUILD-INFO `patch_sha256` updated; code
+      of the patch unchanged). Real test 2026-11-08 (test binary run via a /run drop-in, then removed):
+      cable pulled while a 4096x3072 clip played -> status message "USB drive removed: video
+      playback stopped", mpv gone, display back on the service's own XR24 framebuffer (fallback),
+      no stale mount. Not measured: the exact delay (the logger had run out), by design <= ~2 s
+      (drive poll) + 100 ms. Release 0.3.50: update installed on the test Pi through the real installer
+      (state "succeeded", no reboot needed), then `ungoggled-0.3.50.update.tar.gz` (+ `.sha256`) and
+      `latest.json` on the Nextcloud share (public download verified against the checksum; the
+      previous file is `H:/Claude Code/flash-images/latest.json.0.3.49-backup`). Still on 0.3.49:
+      the flash image and the GitHub release/README download buttons (the fork has no 0.3.50 commit yet).
+- [x] **Fork published (2026-11-08):** `https://github.com/Joker133782/ungoggled-by-Joker133782`
+      (`master` = this working tree at 0.3.49 plus the upstream MIT commit; upstream
+      `TimoLehnertz/ungoggled` has been MIT since 2026-11-02). Commits carry the GitHub noreply
+      identity only (owner's request: no private info on GitHub); the pre-rewrite history is in
+      `H:/Claude Code/backup-ungoggled-before-publishing.bundle` (local, still has the old identity,
+      never push it). `CLAUDE.md` is excluded from the repository. Open: (a) the GitHub release
+      checker (`web/src/releases.ts`) stays off until the owner wants releases on the fork (then
+      point it at the FORK, never at TimoLehnertz/ungoggled); (b) the kernel-driver report is DONE as an
+      issue, no pull request (a PR needs a real name and e-mail in `Signed-off-by`): raspberrypi/linux#7743,
+      posted 2026-11-08 as Joker133782, patch as plain text, no name/e-mail. Answered 2026-11-09 by 6by9 and jc-kynesim (Raspberry Pi): the logging bug (coeff_size printed as
+      pu_size) is confirmed and will be fixed; for the memory-region property they are lukewarm (no obligation
+      to support it, level 5.2 is beyond the block's 5.1 / 4k60 spec, would not be on by default, but the use
+      case is real; 6by9 notes devm_of_reserved_mem_device_init would simplify the patch). Replied 2026-11-09 as Joker133782 (issuecomment-6753177021: the level-5.2 use case, opt-in
+      property, why a child device instead of devm_of_reserved_mem_device_init, offer to test the devm_ variant
+      on a Pi 4 if they prefer it; text in H:/Claude Code/flash-images/kernel-issue-reply-draft.md). Follow-up 2026-11-10: 6by9 (after talking to jc-kynesim) says the idea has merit but he does not want to
+      complicate upstreaming the driver (device-tree binding review is open); left open, to be revisited after the driver is
+      upstream. Logging bug fixed in their #7720. He also notes 3840x2880 is really level 6 (frame 24 % over the 5.2 luma
+      limit); hardware probably decodes up to 4096x4096. Nothing to do or answer; our patch stays our own shipped module.
+      **GitHub release v0.3.49 is published in the fork** (tag on `270829f`, marked Latest): the flash
+      image, the update package and both `.sha256` files; GitHub's asset digests match the build's
+      checksums. The in-app update check still reads the Nextcloud share, not GitHub.
 - [x] **Release 0.3.49 (2026-11-08): update AND flash image published** (flash image added after the user's Test B passed; the user's colleague also asked to install it in the field).
       After the user's Test A (0.3.40 image, in-place update through the web UI) passed:
       `ungoggled-0.3.49.update.tar.gz` (+ `.sha256`) and `latest.json` (7 short notes) are on the
@@ -314,3 +393,46 @@
       NOTE: the tree already has Goggles 2 handling (`src/g2.rs`,
       `g2_sequence.rs`, `v1v2.rs`), so check what those cover before assuming
       it is untested).
+
+- [ ] **Fable code review part 3 (web UI, remaining Rust modules, build scripts), done 2026-11-11:**
+      report `H:\Claude Code\flash-images\review-part3-web-scripts-fable.md`. 0 critical/high, 6 medium, 12 low.
+      Verified by me in the code: W1 (`web/public/watch.html:21` loads mpegts.js from cdn.jsdelivr.net, no SRI,
+      so the spectator page cannot work on the Pi's own Wi-Fi without internet and a third-party script runs in
+      the control origin), W2 (`AbortSignal.any` in `api.ts:29` / `Graphs.tsx:158`, `.at(-1)`: old iPhones show
+      "Disconnected"), W3 (settings fetched once at mount `App.tsx:141`, `save` posts the whole object: a second
+      device reverts changes), W4 (`Recording.tsx:385` deletes without ConfirmDialog), M1 (`stream.rs:66-73`
+      blocking `write_all` under a mutex from the video loop, "Low quality" transcode can stall live HDMI),
+      M3 (`settings.rs:120-147` rewrites 14.6 MiB of built-in videos with fsync on every start; restart loops wear
+      the SD card), B2 (= the item above: `install-release.sh:44` `-fsS .../api/settings`). Not yet verified by
+      me: W5-W8, M2, M4, B1, B3-B6. Nothing changed in the code yet; waits for the user's decision (0.3.52 bundle
+      together with parts 1 + 2).
+
+- [ ] **0.3.52 built and tested on the test Pi, NOT yet released (waits for the user's go)** (2026-11-11). Package
+      `H:/Claude Code/flash-images/ungoggled-0.3.52.update.tar.gz`; installed through the real installer, then a
+      throwaway second server on the Pi's loopback (24 checks: password rules, Secure cookie, 0600 files, root/SSH
+      password follows the control password and change, download + Range, symlink refused, lockout) and the
+      `reset-password` boot-partition file (owner's auth.json backed up and restored). Decisions of the user
+      (2026-11-11): W1 ok; SSH = root = control password, default `ungoggled` everywhere, follows every change
+      (first boot or later); USB only vfat/exfat/ntfs3. Contents: parts 1-3 fixes R1 R2 R3 R4 R5 (client_status +
+      try_lock) R6 (parts) R7 S2 S4 S5 S7 S9(partly: 0600) V1 V2 V3 V4 V5 V7 V8 V10 4kp60 guard W1-W5 W7 W8 M1 M2 M3 B2
+      B4. NOT done: S3 (password step-up for update install), S6 (spectator cap, only LimitNOFILE), S8, V6, V9, M4, B1,
+      B3, B5, B6, R8-R11, a change-password screen in the web UI (only the API endpoint exists).
+      Found while testing: `scripts/check-image.sh` logs in to a throwaway server inside the image being built, which
+      would now set the IMAGE'S root password to the throwaway one -> fixed with `UNGOGGLED_KEEP_SYSTEM_PASSWORD`
+      (set in check-image.sh, plus a re-check of the root password at the end). The first real login on the test Pi
+      after this update changes root's SSH password from `ungoggled` to the owner's web password (scratchpad
+      `pi.py` etc. then stop working; `reset-password` file restores `ungoggled`).
+      Decisions 2026-11-11 (later): NO password step-up for update install / downgrade (S3 declined by the user), NO limit on spectator
+      numbers (S6 declined; only LimitNOFILE=8192 stays), YES a change-password panel in the web UI (building it).
+
+- [ ] **Fable review part 4 (goggles implementations), done 2026-11-11:** report `H:/Claude Code/flash-images/review-part4-goggles-fable.md`.
+      Verdicts: Goggles 3 + O3/O4 via FunctionFS = works (hardware-verified; AOA, descriptors, configfs order, DUML/CRC checked);
+      legacy gadgetfs transport = known-bad after goggles reboot, not reachable from the service; Goggles 2 = unverified (g2_sequence.rs
+      all 241 entries well-formed, but a blind replay of a third party's session incl. stale timestamps/identifiers; never seen on
+      hardware); V1/V2 = should work to first picture, no hardware evidence, no stall recovery. Open decisions/ideas (nothing changed yet):
+      G1 `auto` mode fires the unverified Goggles 2 burst at Goggles 3 whenever no video arrives within 8-13 s (drone not yet powered):
+      verified in code (session.rs ~234-257, test `late_drone_power_on_is_found_by_alternating`); proposed fix: never alternate away from a
+      remembered protocol (goggles whose AOA strings were already seen with video), or default `UNGOGGLED_GOGGLES=goggles3`; needs a real
+      Goggles 3 test (questions list in the report). G4 control_port compare in gadget.rs:316; G5/G6 V1/V2 stall detection + cache SPS/PPS;
+      G9 add goggles_protocol fields to the hardware test logger; FINDINGS.MD line 78 is garbled. Goggles 2 colleague debugging: check
+      `cat /sys/class/udc/*/state` and the journal grep from section 2 of the report.

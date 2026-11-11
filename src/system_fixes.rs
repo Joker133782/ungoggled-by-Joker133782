@@ -766,6 +766,33 @@ fn edit_config(old: &[u8], overlay: bool) -> Result<Edit, String> {
         &mut notes,
         &mut missing,
     );
+    // Never together with an overclocked HEVC block or a changed voltage: that
+    // combination killed the VideoCore firmware (no HDMI on either port) on
+    // the test Pi. A config.txt with such a line keeps the owner's tuning and
+    // does not get 4Kp60 from us; so does one that gets it later, because the
+    // line is then left out of the rebuilt block.
+    let hdmi_4kp60 = hdmi_4kp60
+        && {
+            let clash = user()
+                .filter(|l| l.applies())
+                .filter_map(|l| l.setting())
+                .find(|(k, v)| match *k {
+                    // 600 or more, or anything that is not a plain number.
+                    "hevc_freq" => !v.trim().parse::<u32>().is_ok_and(|f| f < 600),
+                    "over_voltage" | "over_voltage_delta" => v.trim() != "0",
+                    _ => false,
+                });
+            match clash {
+                Some((k, v)) => {
+                    notes.push(format!(
+                    "hdmi_enable_4kp60: not set ({k}={v} is in config.txt; together they stop the HDMI output)"
+                ));
+                    missing.push("hdmi_enable_4kp60");
+                    false
+                }
+                None => true,
+            }
+        };
     // The fan: any gpio-fan overlay outside our block (what raspi-config
     // wrote, say) is the owner's choice of pin and temperature and stays.
     let fan = {

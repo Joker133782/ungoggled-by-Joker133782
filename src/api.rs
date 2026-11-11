@@ -1,4 +1,4 @@
-use crate::{App, assets, auth::Check, settings, terminal, wifi};
+use crate::{App, assets, auth, auth::Check, settings, terminal, wifi};
 use axum::{
     Json, Router,
     body::{Body, Bytes},
@@ -13,7 +13,10 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::atomic::Ordering, time::Duration};
-use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+use tower_http::{
+    services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
+};
 
 type ApiResult<T> = Result<T, (StatusCode, Json<Value>)>;
 fn bad(e: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
@@ -61,11 +64,31 @@ async fn check_password(a: &App, ip: std::net::IpAddr, password: String) -> ApiR
         .await
         .map_err(bad)
 }
-fn session_cookie(token: &str) -> String {
-    // No `Secure`: the control interface is also reachable over plain HTTP
-    // when `--tls-listen ""` disables TLS (see README), and a `Secure`
-    // cookie would silently never be sent there.
-    format!("session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000")
+fn session_cookie(token: &str, secure: bool) -> String {
+    // `Secure` whenever the TLS listener is on: port 80 then only redirects,
+    // and without the flag a browser sends the cookie in clear text with
+    // the first plain-HTTP request (a bookmark, a typed address) before it
+    // sees that redirect. Not with `--tls-listen ""` (see README): a
+    // `Secure` cookie would silently never be sent over plain HTTP.
+    let secure = if secure { "; Secure" } else { "" };
+    format!("session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000{secure}")
+}
+/// Brings the Pi's root/SSH password in line with the control password
+/// `password` (see `system_password`), off the async runtime. A failure only
+/// goes to the log: the control password works either way, and the next
+/// login tries again.
+async fn sync_system_password(a: &App, password: String) {
+    let auth = a.auth.clone();
+    let _ =
+        tokio::task::spawn_blocking(move || match crate::system_password::set_root(&password) {
+            Ok(()) => {
+                if let Err(e) = auth.mark_system_synced(&password) {
+                    eprintln!("Could not record the system password as set: {e:#}");
+                }
+            }
+            Err(e) => eprintln!("Could not set the system (SSH) password: {e:#}"),
+        })
+        .await;
 }
 /// Gates everything except `/watch.html`, `/api/stream.ts` and the few
 /// `/api/auth/*` routes a spectator or a not-yet-logged-in owner can reach —
@@ -132,21 +155,45 @@ async fn login(
     if let Some(remaining) = a.auth.locked_out(ip) {
         return Err(locked_out(remaining));
     }
-    if a.auth.configured() {
-        match check_password(&a, ip, p.password).await? {
-            Check::Right => {}
-            Check::Wrong => return Err(error(StatusCode::UNAUTHORIZED, "Wrong password")),
-            Check::LockedOut(remaining) => return Err(locked_out(remaining)),
-        }
-    } else {
-        if p.password.trim().is_empty() {
-            return Err(bad("Password cannot be empty"));
-        }
-        a.auth.set_password(&p.password).map_err(bad)?;
+    if a.auth.damaged() {
+        return Err(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The saved password file is damaged, so nobody can log in. See Help, \"Control password\", for how to reset it.",
+        ));
     }
+    if !a.auth.configured() {
+        auth::check_new_password(&p.password).map_err(bad)?;
+        let auth = a.auth.clone();
+        let password = p.password.clone();
+        let created = tokio::task::spawn_blocking(move || auth.set_password_if_unset(&password))
+            .await
+            .map_err(bad)?
+            .map_err(bad)?;
+        if created {
+            sync_system_password(&a, p.password).await;
+            return session_response(&a);
+        }
+        // Someone else set the first password a moment earlier: this is an
+        // ordinary login now.
+    }
+    let password = p.password.clone();
+    match check_password(&a, ip, p.password).await? {
+        Check::Right => {}
+        Check::Wrong => return Err(error(StatusCode::UNAUTHORIZED, "Wrong password")),
+        Check::LockedOut(remaining) => return Err(locked_out(remaining)),
+    }
+    // Passwords set before the SSH password followed the control password
+    // are brought in line the first time the owner logs in after the update.
+    if a.auth.needs_system_sync() {
+        sync_system_password(&a, password).await;
+    }
+    session_response(&a)
+}
+/// A fresh session, as a response that also sets the cookie.
+fn session_response(a: &App) -> ApiResult<Response> {
     let token = a.auth.login().map_err(bad)?;
     Ok((
-        [(header::SET_COOKIE, session_cookie(&token))],
+        [(header::SET_COOKIE, session_cookie(&token, a.secure_cookie))],
         Json(json!({"ok":true})),
     )
         .into_response())
@@ -170,9 +217,7 @@ async fn change_password(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(p): Json<ChangePassword>,
 ) -> ApiResult<Response> {
-    if p.new.trim().is_empty() {
-        return Err(bad("New password cannot be empty"));
-    }
+    auth::check_new_password(&p.new).map_err(bad)?;
     match check_password(&a, addr.ip(), p.current).await? {
         Check::Right => {}
         Check::Wrong => {
@@ -180,13 +225,14 @@ async fn change_password(
         }
         Check::LockedOut(remaining) => return Err(locked_out(remaining)),
     }
-    a.auth.set_password(&p.new).map_err(bad)?;
-    let token = a.auth.login().map_err(bad)?;
-    Ok((
-        [(header::SET_COOKIE, session_cookie(&token))],
-        Json(json!({"ok":true})),
-    )
-        .into_response())
+    let auth = a.auth.clone();
+    let new = p.new.clone();
+    tokio::task::spawn_blocking(move || auth.set_password(&new))
+        .await
+        .map_err(bad)?
+        .map_err(bad)?;
+    sync_system_password(&a, p.new).await;
+    session_response(&a)
 }
 pub fn router(app: App, web: std::path::PathBuf) -> Router {
     let protected = Router::new()
@@ -345,9 +391,22 @@ async fn set_time(
         "timezone": clock.as_ref().map(|t| t.tz.clone()),
     })))
 }
+/// The operations lock for a handler that runs on the async runtime itself:
+/// never waits for it (an upload can hold it for minutes, and a waiting
+/// handler would park one of the few runtime threads), answers "busy" instead.
+fn try_operations(a: &App) -> ApiResult<std::sync::MutexGuard<'_, ()>> {
+    match a.operations.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(std::sync::TryLockError::Poisoned(p)) => Ok(p.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => Err(error(
+            StatusCode::CONFLICT,
+            "Another operation (an upload or an update) is still running. Try again in a moment.",
+        )),
+    }
+}
 async fn power_action(a: App, h: HeaderMap, verb: &'static str) -> ApiResult<Json<Value>> {
     guard(&h)?;
-    let _operations = a.operations.lock().unwrap();
+    let _operations = try_operations(&a)?;
     crate::update::api::ensure_idle().map_err(bad)?;
     // Return before the connection this response travels over goes down.
     tokio::spawn(async move {
@@ -393,6 +452,7 @@ async fn save_settings(
     }
     let always_ap_changed = s.wifi_always_ap != a.settings.get().wifi_always_ap;
     let always_ap = s.wifi_always_ap;
+    let goggles_changed = s.goggles != a.settings.get().goggles;
     tokio::task::spawn_blocking(move || {
         let _lock = a.operations.lock().unwrap();
         crate::update::api::ensure_idle()?;
@@ -401,6 +461,11 @@ async fn save_settings(
         // toggle flipped afterwards; a no-op if none has been created yet.
         if result.is_ok() && always_ap_changed {
             wifi::set_client_autoconnect(always_ap);
+        }
+        // The receiver reads the goggles type when it starts: restart it, so
+        // the goggles connect again with the new choice.
+        if result.is_ok() && goggles_changed {
+            a.restart.fetch_add(1, Ordering::Relaxed);
         }
         result
     })
@@ -720,7 +785,7 @@ async fn seek_usb_video(
     .map_err(bad)?;
     Ok(Json(json!({"accepted":true})))
 }
-fn recordings_dir(a: &App) -> std::path::PathBuf {
+pub(crate) fn recordings_dir(a: &App) -> std::path::PathBuf {
     if a.settings.get().record_to_usb
         && let Some(mountpoint) = a.storage.recording_mountpoint()
     {
@@ -784,26 +849,37 @@ async fn recording_thumbnail(State(a): State<App>, Path(name): Path<String>) -> 
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
-async fn recording_file(State(a): State<App>, Path(name): Path<String>) -> Response {
+async fn recording_file(State(a): State<App>, Path(name): Path<String>, req: Request) -> Response {
     if !crate::recording::valid_name(&name) {
         return StatusCode::NOT_FOUND.into_response();
     }
     let path = recordings_dir(&a).join(&name);
-    match tokio::task::spawn_blocking(move || std::fs::read(path)).await {
-        Ok(Ok(bytes)) => (
-            [
-                (header::CONTENT_TYPE, "video/h264".to_owned()),
-                (header::CACHE_CONTROL, "private, max-age=3600".to_owned()),
-                (
-                    header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{name}\""),
-                ),
-            ],
-            bytes,
-        )
-            .into_response(),
-        _ => StatusCode::NOT_FOUND.into_response(),
+    // A regular file only: a link on a drive must not turn a download into a
+    // way to read some other file of the Pi.
+    match tokio::fs::symlink_metadata(&path).await {
+        Ok(meta) if meta.is_file() => {}
+        _ => return StatusCode::NOT_FOUND.into_response(),
     }
+    // Streamed from disk in chunks (a flight is often several GiB, far more
+    // than the Pi has memory for), and with `Range` support so a download
+    // that breaks on a weak Wi-Fi link can continue where it stopped.
+    let Ok(served) = ServeFile::new(&path).try_call(req).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut response = served.into_response();
+    if response.status().is_success() {
+        let headers = response.headers_mut();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("video/h264"));
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, max-age=3600"),
+        );
+        if let Ok(disposition) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
+        {
+            headers.insert(header::CONTENT_DISPOSITION, disposition);
+        }
+    }
+    response
 }
 async fn remove_recording(
     State(a): State<App>,
@@ -834,11 +910,13 @@ async fn play_recording(
     *a.usb_playback.lock().unwrap() = Some(path);
     Ok(Json(json!({"accepted":true})))
 }
-async fn get_wifi(State(a): State<App>) -> Json<Value> {
-    let mut s = wifi::status();
+async fn get_wifi(State(a): State<App>) -> ApiResult<Json<Value>> {
+    let mut s = tokio::task::spawn_blocking(wifi::status)
+        .await
+        .map_err(bad)?;
     s["applying"] = json!(a.wifi_busy.load(Ordering::Relaxed));
     s["error"] = json!(a.wifi_error.lock().unwrap().clone());
-    Json(s)
+    Ok(Json(s))
 }
 /// The access point's SSID and password, for the spectator share sheet's
 /// Wi-Fi QR code. Its own route rather than a field of `/api/wifi`, which the
@@ -857,10 +935,14 @@ async fn save_wifi(
 ) -> ApiResult<Json<Value>> {
     guard(&h)?;
     wifi::validate(&c).map_err(bad)?;
-    let _operations = a.operations.lock().unwrap();
-    crate::update::api::ensure_idle().map_err(bad)?;
-    if a.wifi_busy.swap(true, Ordering::SeqCst) {
-        return Err(bad("Wi-Fi change already in progress"));
+    {
+        // Only the check and the claim need the lock; the work itself is
+        // guarded by `wifi_busy`, which updates and other changes look at.
+        let _operations = try_operations(&a)?;
+        crate::update::api::ensure_idle().map_err(bad)?;
+        if a.wifi_busy.swap(true, Ordering::SeqCst) {
+            return Err(bad("Wi-Fi change already in progress"));
+        }
     }
     *a.wifi_error.lock().unwrap() = None;
     // Return before restarting the AP that carries this HTTP connection.
@@ -885,15 +967,28 @@ async fn scan_wifi(State(a): State<App>) -> ApiResult<Json<Value>> {
     if a.wifi_busy.swap(true, Ordering::SeqCst) {
         return Err(bad("Wi-Fi change already in progress"));
     }
-    let result = tokio::task::spawn_blocking(wifi::scan).await;
-    a.wifi_busy.store(false, Ordering::Relaxed);
+    // The flag is cleared inside the blocking task, which always runs to the
+    // end: if the browser gives up and this handler is dropped at the
+    // `.await`, clearing it after the await would never happen and every later
+    // Wi-Fi change would be refused until the service restarts.
+    let busy = a.wifi_busy.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let scanned = wifi::scan();
+        busy.store(false, Ordering::SeqCst);
+        scanned
+    })
+    .await;
     result.map_err(bad)?.map(Json).map_err(bad)
 }
-async fn get_wifi_client(State(a): State<App>) -> Json<Value> {
-    let mut s = wifi::client_status();
+async fn get_wifi_client(State(a): State<App>) -> ApiResult<Json<Value>> {
+    // `nmcli` can take many seconds when NetworkManager is slow, and the
+    // Settings tab polls this: never on a runtime thread.
+    let mut s = tokio::task::spawn_blocking(wifi::client_status)
+        .await
+        .map_err(bad)?;
     s["applying"] = json!(a.wifi_busy.load(Ordering::Relaxed));
     s["error"] = json!(a.wifi_error.lock().unwrap().clone());
-    Json(s)
+    Ok(Json(s))
 }
 async fn join_wifi_client(
     State(a): State<App>,
@@ -902,10 +997,14 @@ async fn join_wifi_client(
 ) -> ApiResult<Json<Value>> {
     guard(&h)?;
     wifi::validate_join(&c).map_err(bad)?;
-    let _operations = a.operations.lock().unwrap();
-    crate::update::api::ensure_idle().map_err(bad)?;
-    if a.wifi_busy.swap(true, Ordering::SeqCst) {
-        return Err(bad("Wi-Fi change already in progress"));
+    {
+        // Only the check and the claim need the lock; the work itself is
+        // guarded by `wifi_busy`, which updates and other changes look at.
+        let _operations = try_operations(&a)?;
+        crate::update::api::ensure_idle().map_err(bad)?;
+        if a.wifi_busy.swap(true, Ordering::SeqCst) {
+            return Err(bad("Wi-Fi change already in progress"));
+        }
     }
     *a.wifi_error.lock().unwrap() = None;
     let always_ap = a.settings.get().wifi_always_ap;
@@ -927,10 +1026,14 @@ async fn join_wifi_client(
 }
 async fn leave_wifi_client(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
     guard(&h)?;
-    let _operations = a.operations.lock().unwrap();
-    crate::update::api::ensure_idle().map_err(bad)?;
-    if a.wifi_busy.swap(true, Ordering::SeqCst) {
-        return Err(bad("Wi-Fi change already in progress"));
+    {
+        // Only the check and the claim need the lock; the work itself is
+        // guarded by `wifi_busy`, which updates and other changes look at.
+        let _operations = try_operations(&a)?;
+        crate::update::api::ensure_idle().map_err(bad)?;
+        if a.wifi_busy.swap(true, Ordering::SeqCst) {
+            return Err(bad("Wi-Fi change already in progress"));
+        }
     }
     *a.wifi_error.lock().unwrap() = None;
     tokio::spawn(async move {

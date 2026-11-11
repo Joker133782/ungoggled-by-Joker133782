@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { compareVersions, versionParts } from "./release-version";
+import { withTimeout } from "./api";
 
 // Public share: a read-only WebDAV folder on the owner's own Nextcloud,
 // reachable cross-origin only because of a Cloudflare Worker added
@@ -46,27 +47,39 @@ export async function checkLatest(
   current: string,
 ): Promise<NextcloudRelease | null> {
   if (!versionParts(current)) return null;
-  const response = await fetch(`${webdavBase}/latest.json`, {
-    headers: { Authorization: authHeader },
-    signal: AbortSignal.timeout(10000),
-    // Nextcloud's WebDAV response carries no Cache-Control header, so a
-    // plain fetch() can apply the browser's own heuristic freshness and
-    // keep answering from cache for a while after a release — "check for
-    // updates" must always hit the network.
-    cache: "no-store",
-  });
-  if (response.status === 404) return null;
-  if (!response.ok)
-    throw new Error(`Could not reach the update server (${response.status})`);
-  const parsed = parseLatestJson(await response.json());
+  const listing = withTimeout(null, 10000);
+  let parsed: LatestJson;
+  try {
+    const response = await fetch(`${webdavBase}/latest.json`, {
+      headers: { Authorization: authHeader },
+      signal: listing.signal,
+      // Nextcloud's WebDAV response carries no Cache-Control header, so a
+      // plain fetch() can apply the browser's own heuristic freshness and
+      // keep answering from cache for a while after a release — "check for
+      // updates" must always hit the network.
+      cache: "no-store",
+    });
+    if (response.status === 404) return null;
+    if (!response.ok)
+      throw new Error(`Could not reach the update server (${response.status})`);
+    parsed = parseLatestJson(await response.json());
+  } finally {
+    listing.done();
+  }
   if (!versionParts(parsed.version))
     throw new Error("latest.json is malformed");
   if (compareVersions(parsed.version, current) <= 0) return null;
-  const head = await fetch(fileUrl(parsed.file), {
-    method: "HEAD",
-    headers: { Authorization: authHeader },
-    signal: AbortSignal.timeout(10000),
-  });
+  const probe = withTimeout(null, 10000);
+  let head: Response;
+  try {
+    head = await fetch(fileUrl(parsed.file), {
+      method: "HEAD",
+      headers: { Authorization: authHeader },
+      signal: probe.signal,
+    });
+  } finally {
+    probe.done();
+  }
   if (!head.ok)
     throw new Error("The update file listed in latest.json is missing");
   const size = Number(head.headers.get("Content-Length"));

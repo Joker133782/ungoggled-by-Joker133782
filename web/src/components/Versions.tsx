@@ -104,10 +104,8 @@ export function Versions({ disabled }: { disabled: boolean }) {
         wiki="updates"
       />
       <p className="help">
-        The card keeps the active version, the one before it, one older update
-        and the version from the SD-card image. Switching back uses the same
-        safe procedure as an update: settings are backed up and the previous
-        state returns automatically if the version does not start.
+        Switching back is as safe as an update: it undoes itself if the version
+        does not start.
       </p>
       <ul className="release-list">
         {listing.releases.map((r) => (

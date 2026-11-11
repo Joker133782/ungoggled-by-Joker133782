@@ -19,6 +19,7 @@ import { SoftwareUpdate } from "./components/SoftwareUpdate";
 import { useNextcloudRelease } from "./nextcloud";
 import { WifiPanel } from "./components/WifiPanel";
 import { HardwarePanel } from "./components/HardwarePanel";
+import { GogglesPanel } from "./components/GogglesPanel";
 import { UsbVideos } from "./components/UsbVideos";
 import {
   RecordingControls,
@@ -26,6 +27,7 @@ import {
   RecordingSettings,
 } from "./components/Recording";
 import { StreamPanel } from "./components/StreamPanel";
+import { PasswordPanel } from "./components/PasswordPanel";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { PanelHead } from "./components/PanelHead";
 import { Background } from "./components/Background";
@@ -65,6 +67,7 @@ const protocolStates: Record<string, string> = {
   probing: "trying",
   video: "detected",
   forced: "fixed",
+  remembered: "remembered",
 };
 function protocolLabel(status: Status | null): string {
   const id = status?.goggles_protocol;
@@ -218,15 +221,59 @@ export default function App() {
       setBusy(false);
     }
   }
-  async function save(next: Settings) {
-    await api("settings", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(next),
-    });
-    setSettings(next);
-    setMode(next.hdmi_mode);
+  // Saves go out one at a time, each merging only its changed fields into
+  // settings fetched right before it: the server replaces the whole object,
+  // so posting a copy from page load (or from before an earlier save in
+  // another panel returned) would silently revert what another device or
+  // panel changed in the meantime.
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  function queued(step: () => Promise<void>): Promise<void> {
+    const result = saveQueue.current.then(step, step);
+    saveQueue.current = result.catch(() => {});
+    return result;
   }
+  function save(patch: Partial<Settings>) {
+    return queued(async () => {
+      const fresh = await api<Settings>("settings");
+      const next = { ...fresh, ...patch };
+      await api("settings", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(next),
+      });
+      setSettings(next);
+      // An HDMI mode picked but not applied yet stays picked.
+      if ("hdmi_mode" in patch) setMode(next.hdmi_mode);
+    });
+  }
+  // A tab left in the background (or a second device) may show settings
+  // changed elsewhere since; refresh them when it comes back into view. The
+  // HDMI form follows along unless something unapplied is picked there.
+  const settingsRef = useRef(settings);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+  useEffect(() => {
+    const connector = (s: Settings) =>
+      s.hdmi_connector == null ? "auto" : String(s.hdmi_connector);
+    const onVisible = () => {
+      if (document.hidden || !settingsRef.current) return;
+      void queued(async () => {
+        const fresh = await api<Settings>("settings");
+        const prev = settingsRef.current;
+        setSettings(fresh);
+        if (!prev) return;
+        setMode((m) => (m === prev.hdmi_mode ? fresh.hdmi_mode : m));
+        setConnectorChoice((c) =>
+          c === connector(prev) ? connector(fresh) : c,
+        );
+      }).catch(() => {
+        /* Unreachable right now; the connection banner says so. */
+      });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
   const live =
     status?.phase === "streaming" &&
     (status?.bitrate_mbps ?? 0) > 0 &&
@@ -394,10 +441,7 @@ export default function App() {
                   onChange={(e) => {
                     if (settings)
                       void run(() =>
-                        save({
-                          ...settings,
-                          preview_enabled: e.target.checked,
-                        }),
+                        save({ preview_enabled: e.target.checked }),
                       );
                   }}
                 />
@@ -478,6 +522,13 @@ export default function App() {
 
       {tab === "settings" && (
         <div className="page">
+          <GogglesPanel
+            settings={settings}
+            status={status}
+            detected={protocolLabel(status)}
+            disabled={busy || updateBusy}
+            onSave={save}
+          />
           <div className="row">
             <section className="panel settings">
               <PanelHead icon={<IconHdmi />} title="HDMI" wiki="hdmi" />
@@ -487,7 +538,6 @@ export default function App() {
                   if (settings)
                     void run(() =>
                       save({
-                        ...settings,
                         hdmi_mode: mode,
                         hdmi_connector:
                           connectorChoice === "auto"
@@ -516,10 +566,9 @@ export default function App() {
                   </select>
                 </div>
                 <p className="help">
-                  Automatic uses 1080p (up to 60 Hz), which is right for almost
-                  everyone.
+                  Automatic (1080p) suits almost everyone.
                   {modes.some(is4k60) &&
-                    " 4K at 60 Hz works only on the HDMI port next to the USB-C power input and needs a high-speed (HDMI 2.0) cable. If the picture turns black after choosing a 4K mode, choose Automatic again, and restart the Pi if the picture does not come back."}
+                    " 4K60 needs the HDMI port next to USB-C and an HDMI 2.0 cable. Black picture? Choose Automatic."}
                 </p>
                 {hdmiConnectors && hdmiConnectors.length > 1 && (
                   <>
@@ -568,8 +617,7 @@ export default function App() {
                       disabled={busy || updateBusy || !settings}
                       onChange={(e) => {
                         const stretch_live = e.currentTarget.checked;
-                        if (settings)
-                          void run(() => save({ ...settings, stretch_live }));
+                        if (settings) void run(() => save({ stretch_live }));
                       }}
                     />
                     Stretch the live picture to fill the screen
@@ -589,8 +637,7 @@ export default function App() {
                       disabled={busy || updateBusy || !settings}
                       onChange={(e) => {
                         const stretch_usb = e.currentTarget.checked;
-                        if (settings)
-                          void run(() => save({ ...settings, stretch_usb }));
+                        if (settings) void run(() => save({ stretch_usb }));
                       }}
                     />
                     Stretch USB videos to fill the screen
@@ -644,6 +691,7 @@ export default function App() {
               onSave={save}
             />
           </div>
+          <PasswordPanel disabled={updateBusy} />
         </div>
       )}
 
@@ -767,6 +815,8 @@ export default function App() {
                 <dd>{status?.beeper_error ?? "—"}</dd>
                 <dt>Power button</dt>
                 <dd>{status?.power_button_error ?? "—"}</dd>
+                <dt>Extra buttons</dt>
+                <dd>{status?.buttons_error ?? "—"}</dd>
               </dl>
               <a href="/api/diagnostics" target="_blank" rel="noreferrer">
                 Hardware report

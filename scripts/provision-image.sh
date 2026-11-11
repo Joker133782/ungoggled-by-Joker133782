@@ -102,9 +102,12 @@ systemctl enable NetworkManager.service ssh.service ungoggled-update-recovery.se
 # yet confirmed with a real keyboard on real hardware — see TODO.md.
 systemctl enable getty@tty2.service
 printf '[Manager]\nRuntimeWatchdogSec=10s\n' > /etc/systemd/system.conf.d/dji-hdmi-watchdog.conf
-# Keep runtime logs off the SD card; configuration changes remain persistent.
+# The service log is kept across reboots, for 30 days and 100 MB at most
+# (whichever comes first): the Pi is usually powered from the flight battery,
+# so a log in RAM would be gone before anyone looks at what went wrong. The
+# same settings are in prepare-pi.sh, which also brings older installs up to date.
 mkdir -p /etc/systemd/journald.conf.d
-printf '[Journal]\nStorage=volatile\nRuntimeMaxUse=32M\n' > /etc/systemd/journald.conf.d/dji-hdmi.conf
+printf '[Journal]\nStorage=persistent\nSystemMaxUse=100M\nSystemMaxFileSize=8M\nMaxFileSec=1day\nMaxRetentionSec=30day\nRuntimeMaxUse=32M\n' > /etc/systemd/journald.conf.d/dji-hdmi.conf
 apt-get clean
 # Drop content the headless appliance never reads so the distributed image
 # stays small enough to flash and verify quickly. Licences stay; package

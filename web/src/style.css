@@ -569,6 +569,28 @@ hr {
 .hardware-fields .toggle {
   color: var(--text);
 }
+.hardware .subhead {
+  margin: 18px 0 4px;
+  font-size: 1rem;
+}
+.button-rows {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0;
+}
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.button-row input[type="number"] {
+  width: 80px;
+}
+.button-row input[type="text"] {
+  flex: 1 1 160px;
+  min-width: 0;
+}
 dialog.confirm {
   /* Tailwind's reset zeroes margin globally, which overrides the native
      <dialog> UA default that centers it via margin: auto — without this it
@@ -633,6 +655,20 @@ dialog.confirm .actions {
   gap: 7px;
 }
 .wifi-fields input {
+  width: 100%;
+}
+.password-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+.password-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.password-fields input {
   width: 100%;
 }
 .auth-gate {
@@ -756,7 +792,8 @@ footer {
   .metric span {
     font-size: 11px;
   }
-  .wifi-fields {
+  .wifi-fields,
+  .password-fields {
     grid-template-columns: 1fr;
   }
   .connection {

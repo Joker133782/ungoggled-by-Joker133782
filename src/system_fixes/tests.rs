@@ -731,6 +731,55 @@ fn someone_elses_4k60_and_fan_settings_are_respected() {
     assert!(e.text.contains("dtoverlay=gpio-fan,gpiopin=14"));
 }
 
+/// `hdmi_enable_4kp60` together with an overclocked HEVC block or a changed
+/// voltage killed the firmware on the test Pi: such a config.txt must not
+/// get the line, whatever else is in it.
+#[test]
+fn hdmi_4kp60_is_never_added_next_to_hevc_overclock_or_voltage_changes() {
+    let base = "dtoverlay=vc4-kms-v3d,cma-size=0x28000000\n";
+    for (tuning, line) in [
+        ("hevc_freq=600\n", "hevc_freq=600"),
+        ("hevc_freq=700\n", "hevc_freq=700"),
+        ("hevc_freq=fast\n", "hevc_freq=fast"),
+        ("over_voltage_delta=50000\n", "over_voltage_delta=50000"),
+        ("over_voltage=2\n", "over_voltage=2"),
+        ("[all]\nhevc_freq=650\n", "hevc_freq=650"),
+    ] {
+        let e = edit_config(format!("{base}{tuning}").as_bytes(), false).unwrap();
+        assert!(
+            !e.text.contains("hdmi_enable_4kp60"),
+            "{line} must keep 4kp60 out:\n{}",
+            e.text
+        );
+        assert_eq!(e.missing, ["hdmi_enable_4kp60"], "{line}");
+        assert!(e.text.contains(line), "the owner's tuning stays");
+        // The fan and the rest of the block are unaffected.
+        assert!(e.text.contains("dtoverlay=gpio-fan,gpiopin=14,temp=60000"));
+    }
+    // Harmless values do not stop it, and neither does a filter for another Pi.
+    for fine in [
+        "hevc_freq=500\n",
+        "hevc_freq=550\n",
+        "over_voltage=0\n",
+        "over_voltage_delta=0\n",
+        "[pi5]\nhevc_freq=900\n",
+    ] {
+        let e = edit_config(format!("{base}{fine}").as_bytes(), false).unwrap();
+        assert!(
+            e.text.contains("hdmi_enable_4kp60=1"),
+            "{fine}:\n{}",
+            e.text
+        );
+        assert!(e.missing.is_empty(), "{fine}: {:?}", e.missing);
+    }
+    // A line from an earlier release is taken out again once such tuning appears.
+    let before = edit_config(base.as_bytes(), false).unwrap();
+    assert!(before.text.contains("hdmi_enable_4kp60=1"));
+    let tuned = format!("{}hevc_freq=600\n", before.text);
+    let after = edit_config(tuned.as_bytes(), false).unwrap();
+    assert!(!after.text.contains("hdmi_enable_4kp60"), "{}", after.text);
+}
+
 /// The test Pi's `config.txt` after the owner had added both lines by hand
 /// next to the block: a run must change nothing.
 #[test]

@@ -41,7 +41,10 @@ systemctl enable dji-hdmi.service
 healthy=0
 if systemctl restart dji-hdmi.service; then
 for _ in {1..30}; do
-    if curl -fsS --max-time 1 http://127.0.0.1/api/settings >/dev/null; then healthy=1;break;fi
+    # /api/status is the one route open to a request from this machine (the rest
+    # needs the control password). -L -k: with TLS on, plain HTTP only redirects
+    # to the self-signed HTTPS port, and curl does not fail on a 3xx by itself.
+    if curl -fsSLk --max-time 2 http://127.0.0.1/api/status 2>/dev/null | grep -q '"uptime_seconds"'; then healthy=1;break;fi
     sleep 1
 done
 fi

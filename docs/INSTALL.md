@@ -53,8 +53,12 @@ The image is based on **Raspberry Pi OS Lite 64-bit, Debian 13 Trixie**.
 | Web interface | `http://192.168.50.1` |
 
 Connect with `ssh root@192.168.50.1`. Change Wi-Fi credentials in the web
-interface and the root password with `passwd` if desired. Application updates
-preserve existing passwords; these defaults apply to freshly flashed images.
+interface. From 0.3.52 on the SSH/`root` password is the same as the control
+password: the first password you choose in the web interface (and every later
+change of it) is also set for `root`. Application updates preserve existing
+passwords; these defaults apply to freshly flashed images. Forgotten password:
+put an empty file named `reset-password` on the SD card's boot partition (the
+small one with `config.txt`) and start the Pi, see the user guide.
 
 Writing the image puts about 3 GiB on the card. The root partition then
 expands to fill it on first boot, and each device generates its own

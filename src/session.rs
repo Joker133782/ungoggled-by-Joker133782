@@ -9,9 +9,13 @@
 //!
 //! Across connections, the receiver remembers which protocol worked for each
 //! set of AOA identification strings the goggles sent while connecting. Strings
-//! that only ever produced video with one protocol select it first. Unknown
-//! strings, or strings seen with both generations, start with the quick
-//! Goggles 3 probe, so swapping goggles never waits on a stale guess for long.
+//! that only ever produced video with one protocol select it and *stay* with
+//! it: goggles that have shown video once are never probed with the other
+//! generation's requests again (a Goggles 3 whose drone is simply not switched
+//! on yet must not be sent the Goggles 2 arming burst). Unknown strings, or
+//! strings seen with both generations, start with the Goggles 3 probe; the
+//! probe phases of an unknown pair get longer and longer, so goggles without
+//! a drone are not hit with an arming burst every twenty seconds.
 use crate::{clock, g2, protocol};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -151,12 +155,12 @@ pub fn identification(aoa: &[String]) -> Option<String> {
 
 pub struct Timing {
     /// How long to wait for video before switching away from each protocol.
+    /// The Goggles 3 phase doubles after every round without video...
     pub g3_probe: Duration,
+    /// ...up to this.
+    pub g3_probe_max: Duration,
     /// Includes the ~3.3 s Goggles 2 arming burst.
     pub g2_probe: Duration,
-    /// Extra patience for a protocol learned for these goggles, so a drone that
-    /// is still booting does not bounce a known-good protocol.
-    pub remembered_bonus: Duration,
     pub g3_period: Duration,
     pub arm_gap_cap: Duration,
     /// Optional cap on keepalive gaps (tests only; `None` keeps the ~1 s loop).
@@ -171,8 +175,8 @@ impl Default for Timing {
     fn default() -> Self {
         Self {
             g3_probe: Duration::from_secs(8),
+            g3_probe_max: Duration::from_secs(120),
             g2_probe: Duration::from_secs(12),
-            remembered_bonus: Duration::from_secs(5),
             g3_period: Duration::from_secs(3),
             arm_gap_cap: g2::ARM_GAP_CAP,
             sustain_gap_cap: None,
@@ -191,6 +195,10 @@ struct Driver<'a> {
     report: &'a dyn Fn(Value),
     seq: u16,
     locked: bool,
+    /// These goggles showed video with exactly one protocol before: that one
+    /// is used and never given up on.
+    pinned: bool,
+    started: Instant,
     id: Option<String>,
     /// Video byte count and time of its last increase.
     seen: u64,
@@ -218,6 +226,10 @@ pub fn drive(
             remembered.map_or("unknown or ambiguous; Goggles 3 first", |g| g.label())
         );
     }
+    let pinned = forced.is_none() && remembered.is_some();
+    if pinned {
+        eprintln!("Goggles protocol stays with the remembered one; no probing of the other");
+    }
     let mut current = forced.or(remembered).unwrap_or(Goggles::G3);
     let mut d = Driver {
         cfg,
@@ -227,32 +239,35 @@ pub fn drive(
         report,
         seq: 0x100,
         locked: false,
+        pinned,
+        started: Instant::now(),
         id,
         seen: shared.video.load(Ordering::Relaxed),
         last_video: None,
     };
+    let mut g3_probe = t.g3_probe;
     loop {
         d.shared.profile.store(current as u8, Ordering::Relaxed);
         d.announce(current);
         let probe = match current {
-            Goggles::G3 => t.g3_probe,
+            Goggles::G3 => g3_probe,
             Goggles::G2 => t.g2_probe,
-        } + if Some(current) == remembered {
-            t.remembered_bonus
-        } else {
-            Duration::ZERO
         };
-        // Forced protocols never time out.
-        let deadline = forced.is_none().then(|| Instant::now() + probe);
+        // Forced and remembered protocols never time out.
+        let deadline = (forced.is_none() && !pinned).then(|| Instant::now() + probe);
         match current {
             Goggles::G3 => d.run_g3(deadline)?,
             Goggles::G2 => d.run_g2(deadline)?,
         }
         eprintln!(
-            "No video with the {} protocol; trying {}",
+            "No video with the {} protocol after {}s; trying {}",
             current.label(),
+            probe.as_secs(),
             current.other().label()
         );
+        if current == Goggles::G3 {
+            g3_probe = (g3_probe * 2).min(t.g3_probe_max);
+        }
         current = current.other();
     }
 }
@@ -263,10 +278,20 @@ impl Driver<'_> {
             "video"
         } else if Goggles::from_id(&self.cfg.mode).is_some() {
             "forced"
+        } else if self.pinned {
+            "remembered"
         } else {
             "probing"
         };
-        eprintln!("Goggles protocol: {} ({state})", g.label());
+        let after = if self.locked {
+            format!(
+                ", first video {:.1}s after the session started",
+                self.started.elapsed().as_secs_f64()
+            )
+        } else {
+            String::new()
+        };
+        eprintln!("Goggles protocol: {} ({state}{after})", g.label());
         (self.report)(json!({"goggles_protocol":g.id(),"goggles_protocol_state":state}));
     }
 
@@ -412,8 +437,8 @@ mod tests {
     fn fast() -> Timing {
         Timing {
             g3_probe: Duration::from_millis(300),
+            g3_probe_max: Duration::from_millis(1000),
             g2_probe: Duration::from_millis(400),
-            remembered_bonus: Duration::from_millis(200),
             g3_period: Duration::from_millis(50),
             arm_gap_cap: Duration::ZERO,
             sustain_gap_cap: Some(Duration::from_millis(2)),
@@ -679,31 +704,15 @@ mod tests {
     }
 
     #[test]
-    fn identical_identification_becomes_ambiguous_and_prefers_quick_goggles3_probe() {
+    fn an_old_memory_file_with_both_protocols_prefers_the_quick_goggles3_probe() {
         let mem = temp("swap-same");
-        simulate(
-            Model::G2,
-            "auto",
-            Some(mem.clone()),
-            G2_AOA,
-            S(2500),
-            S(0),
-            None,
-        );
-        // Goggles 3 sending the same strings: one detour via Goggles 2...
-        let (log, events) = simulate(
-            Model::G3,
-            "auto",
-            Some(mem.clone()),
-            G2_AOA,
-            S(2500),
-            S(0),
-            None,
-        );
-        assert_eq!(first_port(&log), 0x7530);
-        assert_eq!(final_state(&events), ("goggles3".into(), "video".into()));
-        assert_eq!(learned(&mem, G2_AOA), ["goggles2", "goggles3"]);
-        // ...then both start with the short Goggles 3 probe and still work.
+        // Written by an older release that could learn both for one pair of strings.
+        let id = identification(&G2_AOA.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        let mut m = Memory::default();
+        m.learn(&id, Goggles::G2);
+        m.learn(&id, Goggles::G3);
+        std::fs::write(&mem, serde_json::to_vec(&m).unwrap()).unwrap();
+        // Both start with the short Goggles 3 probe and still work.
         let (log, events) = simulate(
             Model::G3,
             "auto",
@@ -805,5 +814,55 @@ mod tests {
         let (log, events) = simulate(Model::G2, "goggles3", None, G2_AOA, S(1200), S(0), None);
         assert_eq!(on_port(&log, 0x7530), 0);
         assert_eq!(final_state(&events), ("goggles3".into(), "forced".into()));
+    }
+
+    /// Writes a memory file saying these goggles only ever worked with `g`.
+    fn remember(mem: &std::path::Path, aoa: &[&str], g: Goggles) {
+        let id = identification(&aoa.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        let mut m = Memory::default();
+        m.learn(&id, g);
+        std::fs::write(mem, serde_json::to_vec(&m).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn remembered_goggles3_never_get_the_goggles2_burst_while_the_drone_is_off() {
+        let mem = temp("pinned-g3");
+        remember(&mem, OTHER_AOA, Goggles::G3);
+        // The drone is switched on long after any probe would have expired.
+        let (log, events) = simulate(
+            Model::G3,
+            "auto",
+            Some(mem),
+            OTHER_AOA,
+            S(3500),
+            S(2500),
+            None,
+        );
+        assert_eq!(on_port(&log, 0x7530), 0, "no Goggles 2 request at all");
+        assert_eq!(final_state(&events), ("goggles3".into(), "video".into()));
+        assert!(
+            events
+                .iter()
+                .any(|e| e["goggles_protocol_state"] == "remembered"),
+            "reported as remembered while waiting"
+        );
+    }
+
+    #[test]
+    fn remembered_goggles2_stay_with_goggles2() {
+        let mem = temp("pinned-g2");
+        remember(&mem, G2_AOA, Goggles::G2);
+        let (log, events) = simulate(Model::G2, "auto", Some(mem), G2_AOA, S(3500), S(2500), None);
+        assert_eq!(on_port(&log, 0x5749), 0, "no Goggles 3 registration");
+        assert_eq!(final_state(&events), ("goggles2".into(), "video".into()));
+    }
+
+    #[test]
+    fn unknown_goggles_without_a_drone_get_fewer_and_fewer_bursts() {
+        let (log, _) = simulate(Model::G3, "auto", None, G2_AOA, S(5000), S(60_000), None);
+        let bursts = arming_bursts(&log);
+        // 300 ms Goggles 3, 400 ms Goggles 2, then 600, 1000, 1000... of
+        // Goggles 3 between the bursts: 4 in 5 s instead of one every 0.7 s.
+        assert!((3..=5).contains(&bursts), "{bursts} arming bursts");
     }
 }

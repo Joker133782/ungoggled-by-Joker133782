@@ -106,6 +106,7 @@ compatibility with existing installations. The application executable is
 ```sh
 sudo systemctl restart dji-hdmi
 journalctl -u dji-hdmi -f
+journalctl -u dji-hdmi -b -1   # the previous boot: the log is kept 30 days, 100 MB at most
 ```
 
 Rust handles USB, DJI framing, display management, settings and the Axum HTTP API.

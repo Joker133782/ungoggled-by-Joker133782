@@ -50,6 +50,9 @@ grep -qx 'passwordauthentication yes' /tmp/dji-check-sshd
 for plugin in h264parse capssetter kmssink fpsdisplaysink jpegenc videorate videoscale videoconvert video4linux2; do
     gst-inspect-1.0 "$plugin" >/dev/null
 done
+# The control password also becomes root's SSH password; this throwaway instance
+# (it sets a throwaway password below) must leave the image's alone.
+export UNGOGGLED_KEEP_SYSTEM_PASSWORD=1
 /opt/dji-hdmi/current/bin/ungoggled serve --no-autostart --output none \
     --listen 127.0.0.1:18190 --tls-listen '' --runtime-dir /tmp/dji-check-run \
     --data-dir /tmp/dji-check-data --web-dir /opt/dji-hdmi/current/web >/tmp/dji-check.log 2>&1 &
@@ -81,5 +84,16 @@ import json
 from pathlib import Path
 assert json.loads(Path('/tmp/dji-check-settings.json').read_text())['fallback_image'] == 'default-loop.h264'
 assert Path('/tmp/dji-check.png').read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
+PY
+# The login above must not have touched the image's root password.
+python3 - <<'PY'
+import ctypes
+from pathlib import Path
+root = next(line.split(':') for line in Path('/etc/shadow').read_text().splitlines()
+            if line.startswith('root:'))
+crypt = ctypes.CDLL('libcrypt.so.1').crypt
+crypt.argtypes = (ctypes.c_char_p, ctypes.c_char_p)
+crypt.restype = ctypes.c_char_p
+assert crypt(b'ungoggled', root[1].encode()) == root[1].encode(), 'Root password changed by the smoke test'
 PY
 echo 'PASS: image services, permissions, default Wi-Fi/root credentials, SSH login policy, media plugins and ARM64 HTTP server'

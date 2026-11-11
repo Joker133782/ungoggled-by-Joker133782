@@ -564,6 +564,7 @@ pub fn start(
     let loss = lost.clone();
     thread::spawn(move || receive(socket, tx, q, loss, receive_stop));
     Ok(thread::spawn(move || {
+        let _fatal_if_it_ends = ExitUnlessShutdown(shutdown.clone());
         // The CLI --connector is the ultimate fallback (mostly for testing);
         // the setting, when present, wins. Overwriting args.connector keeps
         // every existing use of it (Display::prepare, spawn_player,
@@ -589,6 +590,11 @@ pub fn start(
         args.connector = current.hdmi_connector.or(cli_connector);
         let mut annex = crate::h264::AnnexB::default();
         let mut parameters = crate::h264::Parameters::default();
+        // The newest SPS and PPS: a new decoder can start at the next
+        // complete IDR picture without waiting for a stream that repeats them
+        // rarely (goggles other than Goggles 3 are not known to).
+        let mut last_sps: Option<Vec<u8>> = None;
+        let mut last_pps: Option<Vec<u8>> = None;
         let mut last_input: Option<Instant> = None;
         let mut last_frame: Option<Instant> = None;
         let mut prepare_at = Instant::now() - Duration::from_secs(5);
@@ -603,6 +609,11 @@ pub fn start(
         let mut child_stretch: Option<(u32, u32)> = None;
         let mut child_showed = false;
         let mut stretch_rejected: Option<(u32, u32)> = None;
+        // The stretched decoder ended without ever showing a frame, by
+        // stalling or by exiting on its own. Being taken down for any other
+        // reason (a gap in the feed, a changed picture size, a queue overrun)
+        // says nothing about whether the display can do the stretch.
+        let mut stretch_suspect = false;
         let mut shown_warning: Option<std::path::PathBuf> = None;
         while !shutdown.load(Ordering::Relaxed) {
             let settings = store.get();
@@ -613,11 +624,19 @@ pub fn start(
                 child = None;
                 fallback = None;
                 display = None;
-                display_mode = None;
+                // The mode on screen while a clip plays stays the one the
+                // next clip should keep, unless the output itself changed.
+                if current_usb.is_none()
+                    || settings.hdmi_mode != current.hdmi_mode
+                    || settings.hdmi_connector != current.hdmi_connector
+                {
+                    display_mode = None;
+                }
                 current = settings.clone();
                 args.connector = current.hdmi_connector.or(cli_connector);
                 child_stretch = None;
                 stretch_rejected = None;
+                stretch_suspect = false;
                 annex = Default::default();
                 *preview.lock().unwrap() = None;
                 prepare_at = Instant::now() - Duration::from_secs(5);
@@ -729,8 +748,7 @@ pub fn start(
                     report(json!({"message":"USB drive removed: video playback stopped"}));
                 }
                 usb_player = None;
-                current_usb = None;
-                *usb_playback.lock().unwrap() = None;
+                clear_usb_request(&usb_playback, current_usb.take().as_deref());
             }
             if let Some(path) = current_usb.clone()
                 && usb_player.is_none()
@@ -745,8 +763,7 @@ pub fn start(
                     }
                     Err(e) => {
                         report(json!({"message":format!("USB video playback: {e:#}")}));
-                        current_usb = None;
-                        *usb_playback.lock().unwrap() = None;
+                        clear_usb_request(&usb_playback, current_usb.take().as_deref());
                     }
                 }
             }
@@ -786,6 +803,7 @@ pub fn start(
                 .as_mut()
                 .is_some_and(|p| p.child.try_wait().ok().flatten().is_some())
             {
+                stretch_suspect |= child_stretch.is_some() && !child_showed;
                 child = None;
             }
             let heartbeat = child.as_ref().and_then(|p| *p.heartbeat.lock().unwrap());
@@ -794,8 +812,18 @@ pub fn start(
                 child_showed = true;
             }
             let input_gone = last_input.is_none_or(|t| t.elapsed() > Duration::from_millis(1500));
+            // The very first decoder of a run loads GStreamer's plugins from a
+            // cold cache, which can take longer than the 3 s a later one gets.
+            let stall_after = if starts <= 1 && !child_showed {
+                Duration::from_secs(10)
+            } else {
+                Duration::from_secs(3)
+            };
             let decoder_stalled =
-                child.is_some() && last_frame.is_some_and(|t| t.elapsed() > Duration::from_secs(3));
+                child.is_some() && last_frame.is_some_and(|t| t.elapsed() > stall_after);
+            if decoder_stalled && !input_gone {
+                stretch_suspect |= child_stretch.is_some() && !child_showed;
+            }
             if input_gone || decoder_stalled {
                 child = None;
             }
@@ -805,6 +833,7 @@ pub fn start(
                 // the stretch again.
                 child_stretch = None;
                 stretch_rejected = None;
+                stretch_suspect = false;
             }
             if fallback.as_mut().is_some_and(|l| !l.healthy()) {
                 fallback = None;
@@ -846,12 +875,14 @@ pub fn start(
                     report(json!({"message":reason}));
                     *disk_warning.lock().unwrap() = Some(warning_image.clone());
                 }
-                recording.auto_tick(
+                if let Some(message) = recording.auto_tick(
                     &auto_record_dir,
                     &recordings_dir,
                     current.auto_record,
                     !input_gone,
-                );
+                ) {
+                    report(json!({"message":message}));
+                }
                 recording.crash_tick(&recordings_dir, current.crash_buffer, !input_gone);
             }
             let chunk = match rx.recv_timeout(Duration::from_millis(100)) {
@@ -897,11 +928,22 @@ pub fn start(
                 {
                     frames += 1;
                 }
+                match nal.get(3).map(|b| b & 31) {
+                    Some(7) => last_sps = Some(nal.to_vec()),
+                    Some(8) => last_pps = Some(nal.to_vec()),
+                    _ => {}
+                }
                 if parameters.changed(&nal) {
                     child = None;
                 }
+                let mut started_from_idr = false;
                 if child.is_none() {
-                    if nal.get(3).map(|b| b & 31) != Some(7) {
+                    let kind = nal.get(3).map(|b| b & 31);
+                    started_from_idr = kind == Some(5)
+                        && nal.get(4).is_some_and(|v| v & 0x80 != 0)
+                        && last_sps.is_some()
+                        && last_pps.is_some();
+                    if kind != Some(7) && !started_from_idr {
                         continue;
                     }
                     // Hand the decoder and HDMI overlay over from the loop.
@@ -912,8 +954,10 @@ pub fn start(
                     }
                     // The previous decoder was stretched and never showed a
                     // frame: the display chip refused this stretch.
+                    let suspect = std::mem::take(&mut stretch_suspect);
                     if let Some(size) = child_stretch.take()
                         && !child_showed
+                        && suspect
                     {
                         stretch_rejected = Some(size);
                         report(json!({"message":format!(
@@ -923,7 +967,12 @@ pub fn start(
                     }
                     // Stretch to the screen: the picture's size comes from the
                     // SPS that starts this decoder, the screen's from the mode.
-                    let size = crate::h264::sps_size(&nal);
+                    let sps_nal = if started_from_idr {
+                        last_sps.as_deref().unwrap_or(&nal)
+                    } else {
+                        &nal
+                    };
+                    let size = crate::h264::sps_size(sps_nal);
                     let pixel_aspect = current
                         .stretch_live
                         .then(|| {
@@ -956,11 +1005,24 @@ pub fn start(
                         }
                     }
                 }
-                if let Some(p) = &mut child
-                    && let Err(e) = write_deadline(p.child.stdin.as_mut().unwrap(), &nal)
-                {
-                    child = None;
-                    report(json!({"message":format!("Decoder input: {e}")}));
+                if let Some(p) = &mut child {
+                    // A decoder started at an IDR picture first gets the
+                    // parameter sets it would otherwise have seen before it.
+                    let mut written = Ok(());
+                    if started_from_idr {
+                        eprintln!("Decoder started at an IDR picture with the remembered SPS/PPS");
+                        for set in [&last_sps, &last_pps].into_iter().flatten() {
+                            written = written.and_then(|()| {
+                                write_deadline(p.child.stdin.as_mut().unwrap(), set)
+                            });
+                        }
+                    }
+                    if let Err(e) =
+                        written.and_then(|()| write_deadline(p.child.stdin.as_mut().unwrap(), &nal))
+                    {
+                        child = None;
+                        report(json!({"message":format!("Decoder input: {e}")}));
+                    }
                 }
             }
         }
@@ -971,8 +1033,34 @@ pub fn start(
         // Save a flight in progress rather than discard it on shutdown.
         let recordings_dir = recordings_dir(&store, &storage, &current);
         recording.auto_tick(&auto_record_dir, &recordings_dir, false, false);
+        // The copy runs on its own thread: wait for it, or the flight would
+        // be cut off with the process.
+        recording.wait_for_saves();
         let _ = std::fs::remove_file(&args.video_socket);
     }))
+}
+/// The render thread is the HDMI output. If it ends while the service is not
+/// shutting down (a panic on any of its many `lock().unwrap()`, or the
+/// receive thread dying), the web console would stay up over a dead screen
+/// and nothing would ever restart it. Exiting lets systemd's
+/// `Restart=on-failure` bring the whole service back. Runs on a normal end
+/// too, and during a panic's unwinding.
+struct ExitUnlessShutdown(Arc<AtomicBool>);
+impl Drop for ExitUnlessShutdown {
+    fn drop(&mut self) {
+        if !self.0.load(Ordering::Relaxed) {
+            eprintln!("The video thread ended unexpectedly; exiting so the service restarts");
+            std::process::exit(1);
+        }
+    }
+}
+/// Clears the shared "play this clip" request, but only if it still names the
+/// clip that just ended: another clip requested in the same moment stays.
+fn clear_usb_request(slot: &Mutex<Option<std::path::PathBuf>>, ended: Option<&std::path::Path>) {
+    let mut slot = slot.lock().unwrap();
+    if slot.as_deref() == ended {
+        *slot = None;
+    }
 }
 fn receive(
     socket: UnixDatagram,
@@ -986,10 +1074,15 @@ fn receive(
     while !stop.load(Ordering::Relaxed) {
         let n = match socket.recv(&mut buf) {
             Ok(n) => n,
+            // A signal that lands on this thread interrupts the receive (the
+            // kernel does not restart socket calls that have a timeout): that
+            // is not the end of the stream.
             Err(e)
                 if matches!(
                     e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
                 ) =>
             {
                 continue;
@@ -1488,5 +1581,64 @@ mod tests {
         crate::assets::remove(&dir, id).unwrap();
         assert!(!dir.join(id).with_extension("json").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_clip_requested_as_the_previous_one_ends_is_not_dropped() {
+        use std::path::{Path, PathBuf};
+        let slot = Mutex::new(Some(PathBuf::from("/usb/new.mp4")));
+        // The old clip ended; the owner had already asked for another one.
+        clear_usb_request(&slot, Some(Path::new("/usb/old.mp4")));
+        assert_eq!(
+            slot.lock().unwrap().as_deref(),
+            Some(Path::new("/usb/new.mp4"))
+        );
+        // The request is for the clip that ended: now it is cleared.
+        clear_usb_request(&slot, Some(Path::new("/usb/new.mp4")));
+        assert!(slot.lock().unwrap().is_none());
+        // Nothing playing, nothing requested: stays empty.
+        clear_usb_request(&slot, None);
+        assert!(slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_signal_during_the_receive_does_not_end_the_stream() {
+        use std::os::unix::thread::JoinHandleExt;
+        // A signal handler that does nothing and does not restart system
+        // calls: what a real SIGTERM handler landing on that thread does to
+        // a blocked `recv` with a timeout (EINTR).
+        extern "C" fn nothing(_: libc::c_int) {}
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = nothing as extern "C" fn(libc::c_int) as usize;
+            action.sa_flags = 0;
+            libc::sigaction(libc::SIGUSR2, &action, std::ptr::null_mut());
+        }
+        let (reader, writer) = UnixDatagram::pair().unwrap();
+        reader
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let (tx, rx) = mpsc::sync_channel::<Chunk>(8);
+        let queued = Arc::new(AtomicUsize::new(0));
+        let lost = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = {
+            let (q, l, st) = (queued.clone(), lost.clone(), stop.clone());
+            thread::spawn(move || receive(reader, tx, q, l, st))
+        };
+        thread::sleep(Duration::from_millis(100));
+        for _ in 0..3 {
+            unsafe { libc::pthread_kill(handle.as_pthread_t(), libc::SIGUSR2) };
+            thread::sleep(Duration::from_millis(30));
+        }
+        let mut datagram = 7u64.to_le_bytes().to_vec();
+        datagram.extend_from_slice(b"payload");
+        writer.send(&datagram).unwrap();
+        let chunk = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the receive thread must have survived the signals");
+        assert_eq!(chunk.data, b"payload");
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
     }
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, headers } from "../api";
+import { api, headers, withTimeout } from "../api";
 import { number } from "../format";
 import type { UsbVideo, UsbVideoStatus } from "../types";
 import { PanelHead } from "./PanelHead";
@@ -72,10 +72,15 @@ export function UsbVideos({
   }, [videos]);
   const thumbnailRetriesLeft = useRef(3);
   useEffect(() => {
+    const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      const request = withTimeout(abort.signal, 5000);
       try {
-        const s = await api<UsbVideoStatus>("usb-videos/status");
+        const s = await api<UsbVideoStatus>("usb-videos/status", {
+          signal: request.signal,
+        });
+        if (abort.signal.aborted) return;
         setStatus(s);
         // A background thumbnailing pass can finish between two polls —
         // even start *and* finish between them, now that a thumbnail is a
@@ -96,11 +101,16 @@ export function UsbVideos({
         }
       } catch {
         /* Receiver may be restarting; the next tick retries. */
+      } finally {
+        request.done();
       }
-      timer = setTimeout(poll, 1000);
+      if (!abort.signal.aborted) timer = setTimeout(poll, 1000);
     };
     void poll();
-    return () => clearTimeout(timer);
+    return () => {
+      abort.abort();
+      clearTimeout(timer);
+    };
   }, [loadList]);
   // The list itself is only ever fetched above (on mount) or from Rescan —
   // re-fetch it whenever the set of attached drives actually changes, so an
@@ -175,7 +185,12 @@ export function UsbVideos({
       setBusy(null);
     }
   }
+  // Called from every way a drag, tap or key press on the seek bar can end
+  // (mouse, pointer, touch incl. a cancelled touch, keyboard, focus loss).
+  // Only a pending scrub is sent, so focusing the bar or a second end event
+  // of the same gesture doesn't seek.
   async function commitSeek(position: number) {
+    if (scrub === null) return;
     setScrub(null);
     try {
       await api("usb-videos/seek", {
@@ -234,6 +249,12 @@ export function UsbVideos({
             onChange={(e) => setScrub(Number(e.currentTarget.value))}
             onMouseUp={(e) => void commitSeek(Number(e.currentTarget.value))}
             onTouchEnd={(e) => void commitSeek(Number(e.currentTarget.value))}
+            onPointerUp={(e) => void commitSeek(Number(e.currentTarget.value))}
+            onTouchCancel={(e) =>
+              void commitSeek(Number(e.currentTarget.value))
+            }
+            onKeyUp={(e) => void commitSeek(Number(e.currentTarget.value))}
+            onBlur={(e) => void commitSeek(Number(e.currentTarget.value))}
           />
           <div className="usb-time-row">
             <span>{time(position)}</span>

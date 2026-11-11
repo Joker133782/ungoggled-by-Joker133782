@@ -75,7 +75,10 @@ as application data. Our implementation uses the correctly bounded payloads and
 recomputes both checksums. Tests compare complete output to both valid prefixes.
 Whether extra trailing bytes are tolerated by the device does not make them part
 of the declared DUML message.
-4`
+
+Our initial minimal session sends `00:99` to address `0x28` and `00:88` to `0x3c`,
+every three seconds, with fresh sequence numbers. The G2 AOA reference sends control on `0x7530`; the N3 Android application
+and iOS reference send on `0x5749`. The prototype now defaults to `0x5749`
 (decimal 22345), configurable with `--control-port`. Incoming telemetry can
 arrive on `0x7530`. Video uses `0x574a`.
 **Verified on the attached G3 + O4 Pro:** these corrected registrations produce live video over AOA. Replies include `28→02 00:99` and `3c→02 00:88`. We do not replay the G2 project's entire captured app session,

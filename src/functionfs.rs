@@ -207,6 +207,9 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
                 transitioning = false;
             }
             3 if started && !transitioning => bail!("Goggles disconnected or disabled USB"),
+            3 => eprintln!("FunctionFS disabled (bus reset or re-enumeration)"),
+            5 => eprintln!("USB suspend"),
+            6 => eprintln!("USB resume"),
             4 => {
                 let rt = e[0];
                 let req = e[1];
