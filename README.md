@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/latest"><img src="docs/images/badges/release.svg" alt="Release v0.3.49"></a>
+  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/latest"><img src="docs/images/badges/release.svg" alt="Release v0.3.52"></a>
   <a href="LICENSE"><img src="docs/images/badges/license.svg" alt="MIT license"></a>
   <img src="docs/images/badges/platform.svg" alt="Raspberry Pi 4, 64-bit">
   <img src="docs/images/badges/stack.svg" alt="Rust and React">
@@ -16,15 +16,15 @@
 ## ⬇ Download
 
 <p align="center">
-  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/download/v0.3.49/ungoggled-0.3.49-pi4-arm64.img.xz"><img src="docs/images/download-flash-image.svg" alt="Download flash image: v0.3.49, 684 MB, for a new SD card" width="400"></a>
+  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/download/v0.3.52/ungoggled-0.3.52-pi4-arm64.img.xz"><img src="docs/images/download-flash-image.svg" alt="Download flash image: v0.3.52, 684 MB, for a new SD card" width="400"></a>
   &nbsp;
-  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/download/v0.3.49/ungoggled-0.3.49.update.tar.gz"><img src="docs/images/download-update.svg" alt="Download update: v0.3.49, 18 MB, for a Pi that already runs ungoggled" width="400"></a>
+  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/download/v0.3.52/ungoggled-0.3.52.update.tar.gz"><img src="docs/images/download-update.svg" alt="Download update: v0.3.52, 18 MB, for a Pi that already runs ungoggled" width="400"></a>
 </p>
 
 <p align="center">
   <b>Which one?</b> First time → <b>flash image</b> (write it to a microSD card). Already running ungoggled → <b>update</b> (upload it in the web console).<br>
   <a href="DOWNLOAD.md">Step-by-step guide &amp; checksums</a> ·
-  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/tag/v0.3.49">Release notes v0.3.49</a> ·
+  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/tag/v0.3.52">Release notes v0.3.52</a> ·
   <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases">All versions</a>
 </p>
 

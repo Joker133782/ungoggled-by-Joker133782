@@ -4,12 +4,12 @@
 
 # Download ungoggled
 
-Current version: **v0.3.49** · [release notes](https://github.com/Joker133782/ungoggled-by-Joker133782/releases/tag/v0.3.49) · [all versions](https://github.com/Joker133782/ungoggled-by-Joker133782/releases) · [what changed](CHANGELOG.md)
+Current version: **v0.3.52** · [release notes](https://github.com/Joker133782/ungoggled-by-Joker133782/releases/tag/v0.3.52) · [all versions](https://github.com/Joker133782/ungoggled-by-Joker133782/releases) · [what changed](CHANGELOG.md)
 
 <p align="center">
-  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/download/v0.3.49/ungoggled-0.3.49-pi4-arm64.img.xz"><img src="docs/images/download-flash-image.svg" alt="Download flash image: v0.3.49, 684 MB, for a new SD card" width="400"></a>
+  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/download/v0.3.52/ungoggled-0.3.52-pi4-arm64.img.xz"><img src="docs/images/download-flash-image.svg" alt="Download flash image: v0.3.52, 684 MB, for a new SD card" width="400"></a>
   &nbsp;
-  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/download/v0.3.49/ungoggled-0.3.49.update.tar.gz"><img src="docs/images/download-update.svg" alt="Download update: v0.3.49, 18 MB, for a Pi that already runs ungoggled" width="400"></a>
+  <a href="https://github.com/Joker133782/ungoggled-by-Joker133782/releases/download/v0.3.52/ungoggled-0.3.52.update.tar.gz"><img src="docs/images/download-update.svg" alt="Download update: v0.3.52, 18 MB, for a Pi that already runs ungoggled" width="400"></a>
 </p>
 
 > The files are too big to live in the repository itself, so the buttons link to
@@ -19,8 +19,8 @@ Current version: **v0.3.49** · [release notes](https://github.com/Joker133782/u
 
 | | **Flash image** | **Update** |
 |---|---|---|
-| File | `ungoggled-0.3.49-pi4-arm64.img.xz` | `ungoggled-0.3.49.update.tar.gz` |
-| Size | 684 MiB (717,334,376 bytes) | 18 MiB (18,907,144 bytes) |
+| File | `ungoggled-0.3.52-pi4-arm64.img.xz` | `ungoggled-0.3.52.update.tar.gz` |
+| Size | 684 MiB (717,591,668 bytes) | 18 MiB (19,135,189 bytes) |
 | Use it when | Setting up a **new** microSD card, or starting over | Your Pi **already runs** ungoggled 0.3.0 or newer |
 | What it does | Complete system: Raspberry Pi OS Lite 64-bit (Debian 13 Trixie) + ungoggled, Wi-Fi access point ready | Replaces the ungoggled application, keeps your settings, images, Wi-Fi and passwords |
 | How | Write it to the card (below) | Upload it in the web console (below) |
@@ -77,26 +77,26 @@ step first: see [docs/INSTALL.md](docs/INSTALL.md#upgrading-an-installation-olde
 ## Verify the download (optional)
 
 Each file has a matching `.sha256` file on the
-[release page](https://github.com/Joker133782/ungoggled-by-Joker133782/releases/tag/v0.3.49).
-The SHA-256 checksums for v0.3.49 are:
+[release page](https://github.com/Joker133782/ungoggled-by-Joker133782/releases/tag/v0.3.52).
+The SHA-256 checksums for v0.3.52 are:
 
 | File | SHA-256 |
 |---|---|
-| `ungoggled-0.3.49-pi4-arm64.img.xz` | `00afb0be43f2d710d150849e1620871098914c787465c241a2516b0b6ba57d54` |
-| `ungoggled-0.3.49.update.tar.gz` | `67418f56c5fc3754fd23b5a02d4fede19b2659305ffe9bb9c819b843cb9354a1` |
+| `ungoggled-0.3.52-pi4-arm64.img.xz` | `b6a025f981a88c7b4351d7db0fbb75f1a7c497b0c55484c01818bf26d8bd3916` |
+| `ungoggled-0.3.52.update.tar.gz` | `3457106a337047efc6524fc42b6feb4c054b265db4a106491edc18d6696ffd0b` |
 
 Windows (PowerShell, in the download folder):
 
 ```powershell
-Get-FileHash .\ungoggled-0.3.49-pi4-arm64.img.xz -Algorithm SHA256
-Get-FileHash .\ungoggled-0.3.49.update.tar.gz -Algorithm SHA256
+Get-FileHash .\ungoggled-0.3.52-pi4-arm64.img.xz -Algorithm SHA256
+Get-FileHash .\ungoggled-0.3.52.update.tar.gz -Algorithm SHA256
 ```
 
 Linux / macOS (with the `.sha256` files next to the downloads):
 
 ```sh
-sha256sum -c ungoggled-0.3.49-pi4-arm64.img.xz.sha256
-sha256sum -c ungoggled-0.3.49.update.tar.gz.sha256
+sha256sum -c ungoggled-0.3.52-pi4-arm64.img.xz.sha256
+sha256sum -c ungoggled-0.3.52.update.tar.gz.sha256
 ```
 
 (On macOS use `shasum -a 256 -c` instead of `sha256sum -c`.) The printed checksum
