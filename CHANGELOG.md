@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.53
+
+- **Fixed: a damaged settings file no longer stops the Pi from starting.** It is kept as a copy (`settings.json.bad-...`), every setting that can still be read is taken over, and the rest falls back to the defaults.
+- **Fixed: changing an unrelated setting no longer blanks the screen.** Stream, recording, buttons, pins, the goggles type and the like are applied without rebuilding the picture; only HDMI output, preview and stretching still do.
+- **Fixed: a USB video whose player hangs now ends by itself** instead of slowing the whole receiver down.
+- **Fixed: reboot and shut down work when an update died halfway** and left its state as "installing"; only a really running update still blocks them.
+- **Fixed: the Pi's clock is only sent to the air unit once it is right** (set from the browser or by network time). A Pi without a battery clock used to tell the air unit the time of its last shutdown.
+- **Fixed: a USB connection that stops accepting data no longer freezes the video.** The receiver restarts after ten seconds.
+- **Fixed: one crash in a background task can no longer take the whole web interface down.**
+- **Fixed: after every restart the Pi's clock went back to the day the image was built** (the web interface only set it again when somebody opened it), so the log, new recordings and file dates carried a wrong date. The Pi now remembers the time while it is right (every five minutes and when it shuts down) and starts from there.
+- **Fixed: a recording that cannot get a preview picture is no longer retried on every refresh of the list.**
+- **Fixed: leftovers of a cut-short idle-screen video upload** are cleaned up at the next start.
+- **Fixed: original FPV Goggles (V1/V2)** now take the USB interface over from a kernel driver that already holds it.
+- **Safer boot configuration:** the fan overlay is left out (or removed again) when a pin setting uses GPIO 14, when the serial console is on, or when `# ungoggled: no-fan` stands in `config.txt`; overlay parameters added later no longer attach to our overlay; the record of held kernel packages is saved before the module is loaded; a failed module install is retried once per boot instead of at every start; a lost or empty `config.txt` is restored from the backup; the "restart once" notice follows changes to the boot files and no longer goes stale.
+- **More robust image build and start:** the Raspberry Pi OS download and the extracted image are checked and redone if incomplete; the service now starts even if the USB gadget or a video plugin is missing (the web interface stays reachable to fix it); the image check covers the spectator-stream plugins and mpv.
+- Help center: the console links to the log chapter and the 4K note; messages repeated after a receiver restart are logged again.
+
 ## 0.3.52
 
 - **New: the log is kept for 30 days, across reboots.** It used to live in the Pi's memory and was gone at every power cut, so afterwards nobody could see what had gone wrong. It now goes to the SD card and rolls over by itself: lines older than 30 days are dropped, and so is the oldest part as soon as the log reaches 100 MB, so it can never fill the card. **Download diagnostics** (System tab) contains it, together with the Pi's kernel messages (USB, under-voltage, SD card), the remembered goggles and the USB state.

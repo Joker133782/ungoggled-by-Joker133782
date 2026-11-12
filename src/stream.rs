@@ -4,6 +4,7 @@
 //! latency than HLS because there is no multi-second segment buffering.
 //! Verified end to end in a real browser against this exact `mpegtsmux`
 //! pipeline; not run against the live goggles feed on real hardware.
+use crate::sync::LockExt;
 use anyhow::{Context, Result};
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -71,7 +72,7 @@ struct State {
 impl State {
     fn failed(&mut self) {
         if let Some(relay) = self.relay.take() {
-            let message = relay.last_message.lock().unwrap().clone();
+            let message = relay.last_message.lock_ok().clone();
             eprintln!(
                 "Spectator stream stopped{}",
                 if message.is_empty() {
@@ -93,7 +94,7 @@ impl Controller {
     /// failed is not started again for a while: it would fail the same way,
     /// and every start costs the video loop that calls this.
     pub fn ensure(&self, quality: Quality) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock_ok();
         if state.relay.as_ref().is_some_and(|r| r.quality == quality) {
             return;
         }
@@ -113,14 +114,14 @@ impl Controller {
         }
     }
     pub fn stop(&self) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock_ok();
         state.relay = None;
         state.retry_at = None;
     }
     /// Hand one NAL from the live goggles stream to the relay, if one is
     /// running. Never waits for the relay.
     pub fn feed(&self, nal: &[u8]) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock_ok();
         let Some(relay) = &mut state.relay else {
             return;
         };
@@ -144,7 +145,7 @@ impl Controller {
             .map(|r| r.tx.subscribe())
     }
     pub fn running(&self) -> bool {
-        self.0.lock().unwrap().relay.is_some()
+        self.0.lock_ok().relay.is_some()
     }
 }
 
@@ -230,7 +231,7 @@ fn start(mut cmd: Command, quality: Quality) -> Result<Relay> {
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if !line.trim().is_empty() {
-                *seen.lock().unwrap() = line.chars().take(300).collect();
+                *seen.lock_ok() = line.chars().take(300).collect();
             }
         }
     });
@@ -294,7 +295,7 @@ mod tests {
         let mut cmd = Command::new(program);
         cmd.args(args);
         let c = Controller::default();
-        c.0.lock().unwrap().relay = Some(start(cmd, Quality::High).unwrap());
+        c.0.lock_ok().relay = Some(start(cmd, Quality::High).unwrap());
         c
     }
     fn nal(kind: u8, tag: u8, len: usize) -> Vec<u8> {
@@ -345,10 +346,10 @@ mod tests {
         for _ in 0..2000 {
             c.feed(&nal(0x41, 1, 100_000));
         }
-        assert!(c.0.lock().unwrap().relay.as_ref().unwrap().skipping);
+        assert!(c.0.lock_ok().relay.as_ref().unwrap().skipping);
         // Slices are dropped until a unit that starts a picture group arrives.
         c.feed(&nal(0x41, 2, 10));
-        assert!(c.0.lock().unwrap().relay.as_ref().unwrap().skipping);
+        assert!(c.0.lock_ok().relay.as_ref().unwrap().skipping);
         c.feed(&nal(0x67, 3, 10));
         // The queue is still full, so the SPS is dropped too and it keeps
         // skipping; what matters is that a slice never ends the skipping.
@@ -364,14 +365,14 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(!c.running(), "the dead relay was removed");
-        let retry_at = c.0.lock().unwrap().retry_at.expect("a pause is set");
+        let retry_at = c.0.lock_ok().retry_at.expect("a pause is set");
         assert!(retry_at > Instant::now() + RESTART_AFTER_FAILURE / 2);
         // `ensure` honours the pause: it must not try to start gst-launch.
         c.ensure(Quality::High);
         assert!(!c.running());
         // Stopping the stream (the setting turned off) clears the pause.
         c.stop();
-        assert!(c.0.lock().unwrap().retry_at.is_none());
+        assert!(c.0.lock_ok().retry_at.is_none());
     }
 
     #[test]

@@ -49,19 +49,41 @@ app=/opt/dji-hdmi/current/bin/ungoggled
 if [ -x "$app" ]; then
     timeout 60 "$app" system-fixes apply || echo "system-fixes did not complete (exit $?); continuing" >&2
 fi
-# Configure the USB device side.
-set -eu
-modprobe dwc2
-modprobe libcomposite
-modprobe usb_f_fs
+# Configure the USB device side. Every check below only reports: a failed
+# ExecStartPre would keep `ungoggled serve` from starting, and with it the
+# idle screen, the web console, the diagnostics download and the update
+# upload, which are exactly what is needed to see and fix such a problem.
+# The service then starts anyway; its USB workers fail and are retried, the
+# status shows no USB state, and these messages are in the service log.
+set -u
+problems=0
+for module in dwc2 libcomposite usb_f_fs; do
+    if ! modprobe "$module"; then
+        echo "Could not load kernel module $module; USB to the goggles will not work." >&2
+        problems=$((problems + 1))
+    fi
+done
 if ! ls /sys/class/udc/*/uevent >/dev/null 2>&1; then
     echo 'No USB device controller. Add dtoverlay=dwc2,dr_mode=peripheral to the Pi boot config and reboot.' >&2
-    exit 1
+    problems=$((problems + 1))
 fi
 if ! mountpoint -q /sys/kernel/config; then
-    mount -t configfs configfs /sys/kernel/config
+    if ! mount -t configfs configfs /sys/kernel/config; then
+        echo 'Could not mount configfs at /sys/kernel/config; USB to the goggles will not work.' >&2
+        problems=$((problems + 1))
+    fi
 fi
+missing=
 for element in h264parse capssetter kmssink fpsdisplaysink jpegenc videorate videoscale videoconvert; do
-    gst-inspect-1.0 "$element" >/dev/null
+    gst-inspect-1.0 "$element" >/dev/null 2>&1 || missing="$missing $element"
 done
-echo 'Configfs, FunctionFS and video plugins ready.'
+if [ -n "$missing" ]; then
+    echo "GStreamer elements missing:$missing; video output may not work." >&2
+    problems=$((problems + 1))
+fi
+if [ "$problems" -eq 0 ]; then
+    echo 'Configfs, FunctionFS and video plugins ready.'
+else
+    echo "Starting the service anyway ($problems problem(s) above), so the web console stays reachable." >&2
+fi
+exit 0

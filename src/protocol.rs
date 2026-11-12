@@ -162,7 +162,7 @@ pub fn registration(seq: &mut u16, port: u16) -> Vec<Vec<u8>> {
 }
 
 const TIME_RECEIVER: u8 = 0x28;
-const TIME_SET_CALENDAR: u8 = 0x4a;
+pub(crate) const TIME_SET_CALENDAR: u8 = 0x4a;
 
 /// SetDateTime on the air-unit RTC. Verified on Goggles 3 with O3/O4: ACK 00.
 pub fn time_sync(seq: &mut u16, port: u16, clock: &crate::clock::Wall) -> Vec<u8> {

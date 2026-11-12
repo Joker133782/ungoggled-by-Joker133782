@@ -1,3 +1,4 @@
+use crate::sync::LockExt;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -487,7 +488,7 @@ pub fn watch(shutdown: &AtomicBool, busy: &AtomicBool, error: &Mutex<Option<Stri
             }
             let _ = leave_client();
             busy.store(false, Ordering::Relaxed);
-            *error.lock().unwrap() =
+            *error.lock_ok() =
                 Some("Lost the Wi-Fi connection for 30 seconds — back on the access point.".into());
             unhealthy_since = None;
         }

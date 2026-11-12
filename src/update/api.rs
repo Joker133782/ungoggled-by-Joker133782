@@ -1,5 +1,6 @@
 use super::{Lock, Paths, Phase};
 use crate::App;
+use crate::sync::LockExt;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Multipart, State},
@@ -43,6 +44,46 @@ pub fn ensure_idle() -> anyhow::Result<()> {
         "Settings are locked while the update is being installed"
     );
     Ok(())
+}
+/// Reboot and shut down: refused while an update really is being installed,
+/// but not because of a stale state. If the updater died while the state file
+/// still says "installing" (or the file cannot be read), `ensure_idle` would
+/// refuse every action for good and only pulling the plug would run the
+/// recovery; so when no `ungoggled-update-*` unit is running, the Pi may be
+/// restarted (the recovery service runs at boot).
+pub fn ensure_power_allowed() -> anyhow::Result<()> {
+    let busy = Paths::default().state().map(|s| s.phase.busy());
+    anyhow::ensure!(
+        power_allowed(busy.ok(), update_unit_running),
+        "The update is being installed"
+    );
+    Ok(())
+}
+/// `busy`: what the state file says (`None`: unreadable). `unit_running` is
+/// only asked when the file says busy or cannot be read.
+fn power_allowed(busy: Option<bool>, unit_running: impl FnOnce() -> bool) -> bool {
+    match busy {
+        Some(false) => true,
+        _ => !unit_running(),
+    }
+}
+/// Whether the transient unit of an update worker is active. When systemd
+/// cannot be asked, assume it is (the safe answer).
+fn update_unit_running() -> bool {
+    std::process::Command::new("timeout")
+        .args([
+            "5",
+            "systemctl",
+            "list-units",
+            "--plain",
+            "--no-legend",
+            "--state=active,activating,deactivating",
+            "ungoggled-update-*",
+        ])
+        .output()
+        .map_or(true, |o| {
+            !o.status.success() || !String::from_utf8_lossy(&o.stdout).trim().is_empty()
+        })
 }
 async fn upload(headers: HeaderMap, multipart: Multipart) -> Response {
     guard(&headers)?;
@@ -119,7 +160,7 @@ async fn install(
 ) -> Response {
     guard(&headers)?;
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let _operations = app.operations.lock().unwrap();
+        let _operations = app.operations.lock_ok();
         anyhow::ensure!(
             !app.wifi_busy.load(Ordering::Relaxed),
             "Wait for the Wi-Fi change to finish"
@@ -151,7 +192,7 @@ async fn rollback(
 ) -> Response {
     guard(&headers)?;
     let id = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        let _operations = app.operations.lock().unwrap();
+        let _operations = app.operations.lock_ok();
         anyhow::ensure!(
             !app.wifi_busy.load(Ordering::Relaxed),
             "Wait for the Wi-Fi change to finish"
@@ -199,5 +240,23 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod power_tests {
+    use super::power_allowed;
+
+    #[test]
+    fn a_stale_busy_state_does_not_block_a_reboot() {
+        // Idle: allowed without even asking systemd.
+        assert!(power_allowed(Some(false), || panic!("not asked")));
+        // The file says "installing" and a worker is running: refused.
+        assert!(!power_allowed(Some(true), || true));
+        // The file says "installing" but nothing runs (the updater died): allowed.
+        assert!(power_allowed(Some(true), || false));
+        // Unreadable state file: same rule.
+        assert!(power_allowed(None, || false));
+        assert!(!power_allowed(None, || true));
     }
 }

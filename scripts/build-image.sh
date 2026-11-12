@@ -8,9 +8,23 @@ source_url=https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_l
 source_sha=cdf4f3bfac35ae947b46e4e767f935453810549779ac3290e05a6754aee627e5
 mkdir -p build/cache build/image dist
 base=build/cache/raspios-lite-arm64.img
-if [[ ! -f "$base.xz" ]]; then curl -fL --retry 2 "$source_url" -o "$base.xz";fi
+# Every cached artifact below is written under a temporary name and renamed
+# only once complete, and is checked against its expected size before reuse:
+# an interrupted build (or one that ran out of disk) must not leave a partial
+# file that the next build then trusts as its base.
+if [[ ! -f "$base.xz" ]]; then
+    curl -fL --retry 2 "$source_url" -o "$base.xz.part"
+    mv "$base.xz.part" "$base.xz"
+fi
 printf '%s  %s\n' "$source_sha" "$base.xz" | sha256sum -c -
-[[ -f "$base" ]] || xz -dk "$base.xz"
+# Uncompressed size as recorded in the verified .xz index.
+base_size=$(xz --robot --list "$base.xz" | awk -F'\t' '$1 == "totals" {print $5}')
+[[ $base_size =~ ^[0-9]+$ ]] || { echo "Cannot read the uncompressed size of $base.xz" >&2; exit 1; }
+if [[ ! -f "$base" || $(stat -c %s "$base") != "$base_size" ]]; then
+    rm -f "$base"
+    xz -dc "$base.xz" > "$base.part"
+    mv "$base.part" "$base"
+fi
 bash scripts/prepare-image-release.sh
 # Pinned image layout, verified against its MBR before reading partitions.
 python3 - <<'PY'
@@ -20,10 +34,39 @@ assert b[510:]==b'\x55\xaa'
 assert struct.unpack_from('<II',b,446+8)==(16384,1048576)
 assert struct.unpack_from('<II',b,462+8)==(1064960,4915200)
 PY
-[[ -f build/image/root.ext4 ]] || dd if="$base" of=build/image/root.ext4 bs=512 skip=1064960 count=4915200 status=none
-if [[ ! -f build/image/rootfs/etc/os-release ]]; then
+root_ext4=build/image/root.ext4
+# Outside the tree on purpose: everything inside rootfs ends up in the image.
+extracted=build/image/rootfs.extracted
+if [[ ! -f "$root_ext4" || $(stat -c %s "$root_ext4") != $((4915200*512)) ]]; then
+    rm -f "$root_ext4" "$root_ext4.part" "$extracted" build/image/root.special-modes.json
+    dd if="$base" of="$root_ext4.part" bs=512 skip=1064960 count=4915200 status=none
+    [[ $(stat -c %s "$root_ext4.part") == $((4915200*512)) ]]
+    mv "$root_ext4.part" "$root_ext4"
+fi
+# The extracted tree is reused (and provisioned on top of) by later builds;
+# only one that was extracted completely counts. A tree from before this
+# marker existed, or from an interrupted extraction, is extracted again.
+if [[ ! -f "$extracted" ]]; then
+    # debugfs reports read errors but still exits 0, so check the source first.
+    e2fsck -fn "$root_ext4"
+    if [[ -e build/image/rootfs ]]; then
+        unshare --user --map-root-user --map-auto --mount rm -rf build/image/rootfs
+    fi
     mkdir -p build/image/rootfs
-    unshare --user --map-root-user --map-auto --mount debugfs -R 'rdump / build/image/rootfs' build/image/root.ext4
+    unshare --user --map-root-user --map-auto --mount debugfs -R 'rdump / build/image/rootfs' "$root_ext4"
+    # Write errors (e.g. a full disk) do not fail debugfs either: every inode
+    # in use must have arrived as at least one path (hard links give more).
+    # Allowance: the root directory, reserved inodes 1-10, the orphan file,
+    # and a few special files rdump does not recreate.
+    inodes_used=$(dumpe2fs -h "$root_ext4" 2>/dev/null | awk -F': *' '
+        $1 == "Inode count" {n = $2} $1 == "Free inodes" {f = $2} END {print n - f}')
+    paths=$(unshare --user --map-root-user --map-auto --mount find build/image/rootfs -mindepth 1 | wc -l)
+    if ((paths + 32 < inodes_used)); then
+        echo "Incomplete extraction: $paths paths for $inodes_used inodes in use; check free disk space." >&2
+        exit 1
+    fi
+    [[ -f build/image/rootfs/etc/os-release ]]
+    touch "$extracted"
 fi
 unshare --user --map-root-user --map-auto --mount python3 scripts/restore-image-modes.py build/image/root.ext4 build/image/rootfs
 bundle="build/releases/ungoggled-$version-aarch64"

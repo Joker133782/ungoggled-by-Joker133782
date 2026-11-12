@@ -1,5 +1,6 @@
 //! One display owner for the lifetime of the service. USB workers only deliver
 //! compressed bytes; reconnecting them never removes the fallback framebuffer.
+use crate::sync::LockExt;
 use crate::{WorkerArgs, playspeed::PlaySpeed, settings::Store};
 use serde_json::{Value, json};
 use std::{
@@ -73,10 +74,18 @@ struct UsbPlayer {
     /// said "idle" (see `went_idle`).
     idle_checked: Instant,
     idle_hits: u32,
+    /// Polls of mpv in a row that got no answer at all (see `ipc_dead`).
+    ipc_failures: u32,
 }
 /// How long after the start mpv may still look idle (nothing loaded yet)
 /// without that meaning the clip is over.
 const USB_IDLE_GRACE: Duration = Duration::from_secs(3);
+/// The render loop polls mpv several times a second; an mpv that does not
+/// answer within this is not going to, and must not hold the loop up.
+const USB_POLL_TIMEOUT: Duration = Duration::from_millis(300);
+/// So many polls in a row without any answer (after the start-up grace): mpv
+/// is wedged. The clip is wound up like a finished one, which kills mpv.
+const USB_IPC_DEAD_AFTER: u32 = 5;
 /// Why a USB clip's playback has to be wound up by the render loop.
 #[derive(Debug, PartialEq, Eq)]
 enum UsbEnd {
@@ -97,7 +106,7 @@ fn usb_end(player: Option<&mut UsbPlayer>, clip: Option<&Path>, socket: &Path) -
         return Some(UsbEnd::FileGone);
     }
     let player = player?;
-    (player.finished() || player.eof(socket) || player.went_idle(socket))
+    (player.finished() || player.eof(socket) || player.went_idle(socket) || player.ipc_dead())
         .then_some(UsbEnd::Finished)
 }
 impl UsbPlayer {
@@ -107,7 +116,31 @@ impl UsbPlayer {
             started: Instant::now(),
             idle_checked: Instant::now(),
             idle_hits: 0,
+            ipc_failures: 0,
         }
+    }
+    /// Ask mpv for a boolean property. Counts the polls that got no answer at
+    /// all (an answer that says "unavailable" is an answer).
+    fn poll(&mut self, socket: &Path, property: &str) -> Option<bool> {
+        match mpv_command_within(socket, json!(["get_property", property]), USB_POLL_TIMEOUT) {
+            Ok(reply) => {
+                self.ipc_failures = 0;
+                reply.get("data").and_then(Value::as_bool)
+            }
+            Err(_) => {
+                // Not during start-up: mpv may not have opened its socket yet.
+                if self.started.elapsed() >= USB_IDLE_GRACE {
+                    self.ipc_failures = self.ipc_failures.saturating_add(1);
+                }
+                None
+            }
+        }
+    }
+    /// True once mpv has stopped answering its control socket although the
+    /// process is alive (not exited, not idle), so a clip that can neither end
+    /// nor be asked about does not slow the render loop down for good.
+    fn ipc_dead(&self) -> bool {
+        self.started.elapsed() >= USB_IDLE_GRACE && self.ipc_failures >= USB_IPC_DEAD_AFTER
     }
     /// True once mpv has nothing loaded any more although it is still running
     /// (`--idle=yes`): the file ended, or could not be read any longer. Asked
@@ -121,10 +154,7 @@ impl UsbPlayer {
         }
         if self.idle_checked.elapsed() >= Duration::from_millis(500) {
             self.idle_checked = Instant::now();
-            let idle = mpv_command(socket, json!(["get_property", "idle-active"]))
-                .ok()
-                .and_then(|r| r.get("data").and_then(Value::as_bool))
-                .unwrap_or(false);
+            let idle = self.poll(socket, "idle-active").unwrap_or(false);
             self.idle_hits = if idle { self.idle_hits + 1 } else { 0 };
         }
         self.idle_hits >= 2
@@ -142,11 +172,8 @@ impl UsbPlayer {
     /// standing aside for USB playback forever, never falling through to
     /// the idle screen again until the Pi was restarted (confirmed in the
     /// field, 2026-11-01).
-    fn eof(&self, socket: &Path) -> bool {
-        mpv_command(socket, json!(["get_property", "eof-reached"]))
-            .ok()
-            .and_then(|r| r.get("data").and_then(Value::as_bool))
-            .unwrap_or(false)
+    fn eof(&mut self, socket: &Path) -> bool {
+        self.poll(socket, "eof-reached").unwrap_or(false)
     }
 }
 impl Drop for UsbPlayer {
@@ -174,8 +201,17 @@ pub fn usb_mpv_socket(video_socket: &Path) -> std::path::PathBuf {
 /// command array, e.g. `json!(["get_property", "time-pos"])`. See
 /// <https://github.com/mpv-player/mpv/blob/master/DOCS/man/ipc.rst>.
 pub fn mpv_command(socket: &Path, command: Value) -> anyhow::Result<Value> {
+    mpv_command_within(socket, command, Duration::from_secs(2))
+}
+/// `mpv_command` with its own limit for the reply (and for sending).
+pub fn mpv_command_within(
+    socket: &Path,
+    command: Value,
+    timeout: Duration,
+) -> anyhow::Result<Value> {
     let mut stream = UnixStream::connect(socket)?;
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     let mut request = serde_json::to_vec(&json!({"command": command}))?;
     request.push(b'\n');
     stream.write_all(&request)?;
@@ -385,7 +421,7 @@ impl Loop {
         if self.feeder.as_ref().is_some_and(|f| f.is_finished()) {
             return false;
         }
-        let beat = *p.heartbeat.lock().unwrap();
+        let beat = *p.heartbeat.lock_ok();
         // The first pipeline after boot loads its plugins from a cold SD card.
         let grace = self.started.elapsed() < Duration::from_secs(10);
         grace || beat.is_some_and(|t| t.elapsed() < Duration::from_secs(3))
@@ -491,10 +527,24 @@ fn fill_par(w: u32, h: u32, out_w: u32, out_h: u32) -> Option<(u32, u32)> {
     }
     Some((u32::try_from(n).ok()?, u32::try_from(d).ok()?))
 }
+/// Settings whose change has to rebuild the output (stopping the live
+/// decoder, the idle loop and the display with it): the picture's size and
+/// output, the preview and the stretching of the live picture. Every other
+/// setting is either read fresh by the loop on each pass (stream, recording,
+/// USB stretch, ...) or by somebody else entirely (pins, buttons, terminal,
+/// goggles type, Wi-Fi), so changing it mid-flight must not blank the screen.
+/// `fallback_image` (the idle screen) is the one more that rebuilds, but not
+/// while there is a `live` picture, see `must_rebuild`.
+#[cfg(test)]
+const REBUILD_SETTINGS: [&str; 5] = [
+    "hdmi_mode",
+    "hdmi_connector",
+    "preview_enabled",
+    "stretch_live",
+    "fallback_image",
+];
 /// Whether a change from `current` to `next` settings has to rebuild the
-/// output right now (stopping the live decoder, the idle loop and the display
-/// with it). Settings this loop never reads (`terminal_enabled`) or applies
-/// another way (`stretch_usb`) don't count.
+/// output right now.
 /// A different idle screen alone waits while there is a `live` picture:
 /// rebuilding the display under live video would interrupt it just to change
 /// what is shown once there is none (the same reasoning as the disk-full
@@ -504,15 +554,11 @@ fn must_rebuild(
     next: &crate::settings::Settings,
     live: bool,
 ) -> bool {
-    let video = |s: &crate::settings::Settings| crate::settings::Settings {
-        terminal_enabled: false,
-        // Applied to a running USB player over its IPC socket, or when the
-        // next clip starts; no reason to tear down the live decoder.
-        stretch_usb: false,
-        fallback_image: None,
-        ..s.clone()
-    };
-    video(current) != video(next) || (current.fallback_image != next.fallback_image && !live)
+    current.hdmi_mode != next.hdmi_mode
+        || current.hdmi_connector != next.hdmi_connector
+        || current.preview_enabled != next.preview_enabled
+        || current.stretch_live != next.stretch_live
+        || (current.fallback_image != next.fallback_image && !live)
 }
 // Each parameter is independent shared state the render thread owns for its
 // whole lifetime; grouping them into a struct wouldn't make any of them less
@@ -638,8 +684,16 @@ pub fn start(
                 stretch_rejected = None;
                 stretch_suspect = false;
                 annex = Default::default();
-                *preview.lock().unwrap() = None;
+                *preview.lock_ok() = None;
                 prepare_at = Instant::now() - Duration::from_secs(5);
+            } else if current != settings {
+                // Applied without tearing anything down; a deferred idle-screen
+                // change stays pending in `current` until the live picture ends.
+                let idle_screen = current.fallback_image.clone();
+                current = crate::settings::Settings {
+                    fallback_image: idle_screen,
+                    ..settings.clone()
+                };
             }
             if current.stream_enabled {
                 stream.ensure(crate::stream::Quality::parse(&current.stream_quality));
@@ -663,7 +717,7 @@ pub fn start(
                 .lock()
                 .unwrap()
                 .clone()
-                .or_else(|| network_notice.lock().unwrap().clone());
+                .or_else(|| network_notice.lock_ok().clone());
             let input_gone_now =
                 last_input.is_none_or(|t| t.elapsed() > Duration::from_millis(1500));
             if input_gone_now && warning != shown_warning {
@@ -710,7 +764,7 @@ pub fn start(
             // An explicit request to play a USB-drive video takes over the
             // display from both live goggles input and the fallback loop,
             // until it finishes, errors, or is stopped from the web interface.
-            let requested_usb = usb_playback.lock().unwrap().clone();
+            let requested_usb = usb_playback.lock_ok().clone();
             if requested_usb != current_usb {
                 child = None;
                 fallback = None;
@@ -806,7 +860,7 @@ pub fn start(
                 stretch_suspect |= child_stretch.is_some() && !child_showed;
                 child = None;
             }
-            let heartbeat = child.as_ref().and_then(|p| *p.heartbeat.lock().unwrap());
+            let heartbeat = child.as_ref().and_then(|p| *p.heartbeat.lock_ok());
             if let Some(t) = heartbeat {
                 last_frame = Some(t);
                 child_showed = true;
@@ -862,7 +916,7 @@ pub fn start(
                 }
             }
             if child.is_none() {
-                *preview.lock().unwrap() = None;
+                *preview.lock_ok() = None;
                 report(
                     json!({"hdmi":if args.output=="hdmi" && display.is_some(){"fallback"}else{"idle"},"output_fps":0,"fallback_video":fallback.is_some()}),
                 );
@@ -873,7 +927,7 @@ pub fn start(
                 frames = 0;
                 if let Some(reason) = recording.enforce_space(&recordings_dir) {
                     report(json!({"message":reason}));
-                    *disk_warning.lock().unwrap() = Some(warning_image.clone());
+                    *disk_warning.lock_ok() = Some(warning_image.clone());
                 }
                 if let Some(message) = recording.auto_tick(
                     &auto_record_dir,
@@ -1057,7 +1111,7 @@ impl Drop for ExitUnlessShutdown {
 /// Clears the shared "play this clip" request, but only if it still names the
 /// clip that just ended: another clip requested in the same moment stays.
 fn clear_usb_request(slot: &Mutex<Option<std::path::PathBuf>>, ended: Option<&std::path::Path>) {
-    let mut slot = slot.lock().unwrap();
+    let mut slot = slot.lock_ok();
     if slot.as_deref() == ended {
         *slot = None;
     }
@@ -1257,7 +1311,7 @@ fn spawn_player(
                 report(json!({"input_width":w,"input_height":h,"input_nominal_fps":fps}));
             }
             if let Some((frames, fps)) = frame_stats(&line) {
-                *beat.lock().unwrap() = Some(Instant::now());
+                *beat.lock_ok() = Some(Instant::now());
                 if hdmi && live {
                     report(json!({"hdmi":"playing","output_frames":frames,"output_fps":fps}));
                 }
@@ -1281,7 +1335,7 @@ fn read_jpegs(mut reader: UnixStream, preview: Preview, active: Arc<AtomicBool>)
         while let Some(end) = buffer.windows(2).position(|b| b == [0xff, 0xd9]) {
             let frame: Vec<_> = buffer.drain(..end + 2).collect();
             if frame.starts_with(&[0xff, 0xd8]) {
-                *preview.lock().unwrap() = Some((Instant::now(), frame));
+                *preview.lock_ok() = Some((Instant::now(), frame));
             }
         }
         if buffer.len() > 2 * 1024 * 1024 {
@@ -1389,6 +1443,45 @@ mod tests {
     }
 
     #[test]
+    fn a_wedged_mpv_ends_the_clip_instead_of_slowing_the_loop_for_ever() {
+        let dir = test_dir("usb-wedged");
+        let socket = dir.join("mpv.sock");
+        // A control socket that accepts connections and never answers.
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let held = std::thread::spawn(move || {
+            let mut open = Vec::new();
+            while let Ok((s, _)) = listener.accept() {
+                open.push(s);
+            }
+        });
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut player = UsbPlayer::new(child);
+        // Still starting: no verdict, however silent mpv is.
+        for _ in 0..8 {
+            assert_eq!(usb_end(Some(&mut player), None, &socket), None);
+        }
+        player.started = Instant::now() - USB_IDLE_GRACE - Duration::from_secs(1);
+        let started = Instant::now();
+        let mut ended = None;
+        for _ in 0..12 {
+            ended = usb_end(Some(&mut player), None, &socket);
+            if ended.is_some() {
+                break;
+            }
+        }
+        assert_eq!(ended, Some(UsbEnd::Finished));
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "took {:?}",
+            started.elapsed()
+        );
+        drop(player);
+        let _ = std::fs::remove_file(&socket);
+        drop(held);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_player_that_exited_ends_the_clip() {
         let dir = test_dir("usb-exited");
         let clip = dir.join("clip.mp4");
@@ -1460,6 +1553,83 @@ mod tests {
             ..current.clone()
         };
         assert!(must_rebuild(&current, &live, true));
+    }
+    #[test]
+    fn an_unrelated_setting_never_blanks_the_screen() {
+        let current = crate::settings::Settings::default();
+        for changed in [
+            crate::settings::Settings {
+                stream_enabled: true,
+                ..current.clone()
+            },
+            crate::settings::Settings {
+                stream_quality: "event".into(),
+                ..current.clone()
+            },
+            crate::settings::Settings {
+                auto_record: true,
+                crash_buffer: true,
+                record_to_usb: true,
+                ..current.clone()
+            },
+            crate::settings::Settings {
+                beeper_pin: Some(5),
+                goggles_led_pin: None,
+                beep_until_time_synced: true,
+                ..current.clone()
+            },
+            crate::settings::Settings {
+                goggles: "goggles2".into(),
+                wifi_always_ap: false,
+                terminal_enabled: true,
+                ..current.clone()
+            },
+            crate::settings::Settings {
+                buttons: vec![crate::settings::GpioButton {
+                    pin: 5,
+                    action: crate::settings::ButtonAction::SaveClip,
+                    hold_ms: 0,
+                    script: None,
+                }],
+                ..current.clone()
+            },
+        ] {
+            assert!(!must_rebuild(&current, &changed, true));
+            assert!(!must_rebuild(&current, &changed, false));
+        }
+    }
+    /// Adding a setting forces a decision here: does changing it rebuild the
+    /// display, or is it read fresh / by somebody else?
+    #[test]
+    fn every_setting_is_classified_for_the_rebuild_rule() {
+        const NO_REBUILD: &[&str] = &[
+            "goggles",
+            "beeper_pin",
+            "power_button_pin",
+            "goggles_led_pin",
+            "video_led_pin",
+            "hdmi_led_pin",
+            "beep_until_time_synced",
+            "buttons",
+            "stream_enabled",
+            "stream_quality",
+            "auto_record",
+            "crash_buffer",
+            "record_to_usb",
+            "wifi_always_ap",
+            "terminal_enabled",
+            "stretch_usb",
+        ];
+        let json = serde_json::to_value(crate::settings::Settings::default()).unwrap();
+        for key in json.as_object().unwrap().keys() {
+            assert!(
+                REBUILD_SETTINGS.contains(&key.as_str()) || NO_REBUILD.contains(&key.as_str()),
+                "setting {key} is not classified in video.rs (REBUILD_SETTINGS / this list)"
+            );
+        }
+        for key in REBUILD_SETTINGS {
+            assert!(json.get(key).is_some(), "{key} is not a setting");
+        }
     }
     #[test]
     fn fill_par_stretches_only_what_does_not_fit() {
@@ -1589,16 +1759,13 @@ mod tests {
         let slot = Mutex::new(Some(PathBuf::from("/usb/new.mp4")));
         // The old clip ended; the owner had already asked for another one.
         clear_usb_request(&slot, Some(Path::new("/usb/old.mp4")));
-        assert_eq!(
-            slot.lock().unwrap().as_deref(),
-            Some(Path::new("/usb/new.mp4"))
-        );
+        assert_eq!(slot.lock_ok().as_deref(), Some(Path::new("/usb/new.mp4")));
         // The request is for the clip that ended: now it is cleared.
         clear_usb_request(&slot, Some(Path::new("/usb/new.mp4")));
-        assert!(slot.lock().unwrap().is_none());
+        assert!(slot.lock_ok().is_none());
         // Nothing playing, nothing requested: stays empty.
         clear_usb_request(&slot, None);
-        assert!(slot.lock().unwrap().is_none());
+        assert!(slot.lock_ok().is_none());
     }
 
     #[test]

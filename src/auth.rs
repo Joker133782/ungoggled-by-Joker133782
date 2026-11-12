@@ -7,6 +7,7 @@
 //! than a real KDF crate (PBKDF2/Argon2): `sha2` is already a dependency and
 //! pure Rust, and this guards a local Wi-Fi device against casual access,
 //! not a stored secret worth a dedicated crate to defend at scale.
+use crate::sync::LockExt;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -231,7 +232,7 @@ impl Store {
     /// `Some(remaining)` while `ip` is locked out from too many recent wrong
     /// passwords; clears the lockout itself once it has expired.
     pub fn locked_out(&self, ip: IpAddr) -> Option<Duration> {
-        let mut attempts = self.attempts.lock().unwrap();
+        let mut attempts = self.attempts.lock_ok();
         let until = attempts.get(&ip)?.locked_until?;
         let now = Instant::now();
         if until > now {
@@ -249,7 +250,7 @@ impl Store {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push_back(now);
-        let mut attempts = self.attempts.lock().unwrap();
+        let mut attempts = self.attempts.lock_ok();
         let a = attempts.entry(ip).or_default();
         // A typo weeks ago must not count towards today's lockout.
         if a.last_failure
@@ -266,12 +267,12 @@ impl Store {
     /// A right password clears that IP's record — a fat-fingered attempt or
     /// two shouldn't linger against someone who then logs in correctly.
     pub fn record_success(&self, ip: IpAddr) {
-        self.attempts.lock().unwrap().remove(&ip);
+        self.attempts.lock_ok().remove(&ip);
     }
     /// A password is set, or the file that should hold it is damaged (then
     /// the login form is the right thing to show, never the first-run setup).
     pub fn configured(&self) -> bool {
-        self.damaged() || self.creds.lock().unwrap().is_some()
+        self.damaged() || self.creds.lock_ok().is_some()
     }
     fn new_credentials(password: &str) -> Result<Credentials> {
         let salt = random_bytes(SALT_LEN)?;
@@ -300,8 +301,8 @@ impl Store {
     /// right after).
     pub fn set_password(&self, password: &str) -> Result<()> {
         let creds = Self::new_credentials(password)?;
-        self.store(&mut self.creds.lock().unwrap(), creds)?;
-        self.sessions.lock().unwrap().clear();
+        self.store(&mut self.creds.lock_ok(), creds)?;
+        self.sessions.lock_ok().clear();
         Ok(())
     }
     /// First-time setup: stores `password` only if nothing is configured yet,
@@ -309,12 +310,12 @@ impl Store {
     /// `Ok(false)` means someone else got there first.
     pub fn set_password_if_unset(&self, password: &str) -> Result<bool> {
         let creds = Self::new_credentials(password)?;
-        let mut slot = self.creds.lock().unwrap();
+        let mut slot = self.creds.lock_ok();
         if slot.is_some() || self.damaged() {
             return Ok(false);
         }
         self.store(&mut slot, creds)?;
-        self.sessions.lock().unwrap().clear();
+        self.sessions.lock_ok().clear();
         Ok(true)
     }
     /// The Pi's root/SSH password does not yet match the control password.
@@ -328,7 +329,7 @@ impl Store {
     /// Records that the Pi's root/SSH password now matches the control
     /// password. Does nothing when the password was changed meanwhile.
     pub fn mark_system_synced(&self, password: &str) -> Result<()> {
-        let mut slot = self.creds.lock().unwrap();
+        let mut slot = self.creds.lock_ok();
         let Some(mut creds) = slot.clone() else {
             return Ok(());
         };
@@ -342,7 +343,7 @@ impl Store {
         self.store(&mut slot, creds)
     }
     pub fn verify(&self, password: &str) -> bool {
-        let Some(creds) = self.creds.lock().unwrap().clone() else {
+        let Some(creds) = self.creds.lock_ok().clone() else {
             return false;
         };
         let (Some(salt), Some(want)) = (from_hex(&creds.salt), from_hex(&creds.hash)) else {
@@ -353,14 +354,14 @@ impl Store {
     /// Issues a fresh session token; the caller sets it as the session cookie.
     pub fn login(&self) -> Result<String> {
         let token = random_token()?;
-        self.sessions.lock().unwrap().insert(token.clone());
+        self.sessions.lock_ok().insert(token.clone());
         Ok(token)
     }
     pub fn logout(&self, token: &str) {
-        self.sessions.lock().unwrap().remove(token);
+        self.sessions.lock_ok().remove(token);
     }
     pub fn authenticated(&self, token: Option<&str>) -> bool {
-        token.is_some_and(|t| self.sessions.lock().unwrap().contains(t))
+        token.is_some_and(|t| self.sessions.lock_ok().contains(t))
     }
 }
 
@@ -546,7 +547,7 @@ mod tests {
         }
         assert_eq!(store.recent_global_failures(), 30);
         {
-            let mut recent = store.recent_failures.lock().unwrap();
+            let mut recent = store.recent_failures.lock_ok();
             for t in recent.iter_mut().take(25) {
                 *t = Instant::now() - GLOBAL_WINDOW - Duration::from_secs(1);
             }

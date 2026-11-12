@@ -7,6 +7,7 @@
 //! instant-replay), and auto-recording a whole flight (buffered in RAM,
 //! under the runtime tmpfs, while the feed is live; written to the SD card,
 //! keeping the 5 most recent, as soon as the feed drops).
+use crate::sync::LockExt;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -155,7 +156,7 @@ impl Controller {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let name = format!("recording-{stamp}.h264");
         let file = File::create(dir.join(&name))?;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         inner.active = Some(Active {
             file,
             name: name.clone(),
@@ -166,7 +167,7 @@ impl Controller {
     }
     /// Stop the active recording, if any, and report how big it ended up.
     pub fn stop(&self) -> Option<Value> {
-        let active = self.inner.lock().unwrap().active.take()?;
+        let active = self.inner.lock_ok().active.take()?;
         Some(json!({
             "name": active.name,
             "bytes": active.bytes,
@@ -174,7 +175,7 @@ impl Controller {
         }))
     }
     pub fn status(&self) -> Value {
-        match &self.inner.lock().unwrap().active {
+        match &self.inner.lock_ok().active {
             Some(a) => json!({
                 "recording": true,
                 "name": a.name,
@@ -187,7 +188,7 @@ impl Controller {
     /// Feed one NAL unit from the live goggles stream: always into the
     /// rolling buffer, and into the active recording file if there is one.
     pub fn feed(&self, nal: &[u8]) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         inner.buffer.push(nal);
         if let Some(active) = &mut inner.active
             && active.file.write_all(nal).is_ok()
@@ -220,7 +221,7 @@ impl Controller {
     ) -> Option<String> {
         let mut message = None;
         let finished = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock_ok();
             let mut finished = Vec::new();
             if !enabled || !input_live {
                 finished.extend(inner.auto.take());
@@ -268,7 +269,7 @@ impl Controller {
     /// most recent `MAX_CRASH_CLIPS`. Cheap to call every tick either way.
     pub fn crash_tick(&self, dir: &Path, enabled: bool, input_live: bool) {
         let snapshot = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock_ok();
             let just_dropped = enabled && inner.crash_was_live && !input_live;
             inner.crash_was_live = input_live;
             just_dropped.then(|| inner.buffer.snapshot()).flatten()
@@ -284,7 +285,7 @@ impl Controller {
     /// human-readable reason if it just dropped below the minimum. A no-op,
     /// cheap to call every tick, while nothing is recording.
     pub fn enforce_space(&self, dir: &Path) -> Option<String> {
-        self.inner.lock().unwrap().active.as_ref()?;
+        self.inner.lock_ok().active.as_ref()?;
         if free_bytes(dir).is_some_and(|f| f >= MIN_FREE_BYTES) {
             return None;
         }
@@ -298,7 +299,7 @@ impl Controller {
     pub fn save_buffer(&self, dir: &Path) -> anyhow::Result<Value> {
         fs::create_dir_all(dir)?;
         let bytes = {
-            let inner = self.inner.lock().unwrap();
+            let inner = self.inner.lock_ok();
             inner
                 .buffer
                 .snapshot()
@@ -328,10 +329,21 @@ impl Controller {
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_secs());
-                let thumbnail = crate::storage::ensure_thumbnail(
-                    &e.path(),
-                    &self.thumb_dir.join(format!("{name}.jpg")),
-                );
+                let thumb = self.thumb_dir.join(format!("{name}.jpg"));
+                let marker = self.thumb_dir.join(format!("{name}.failed"));
+                let thumbnail = if thumb.exists() {
+                    true
+                } else if failed_at_size(&marker, meta.len()) {
+                    // Tried already: a file mpv cannot open would otherwise cost
+                    // up to 20 s on every single list request.
+                    false
+                } else {
+                    let made = crate::storage::ensure_thumbnail(&e.path(), &thumb);
+                    if !made {
+                        let _ = fs::write(&marker, meta.len().to_string());
+                    }
+                    made
+                };
                 Some(json!({"name":name,"size":meta.len(),"modified":modified,"thumbnail":thumbnail}))
             })
             .collect();
@@ -473,6 +485,15 @@ fn free_bytes(path: &Path) -> Option<u64> {
     Some(stat.f_bavail as u64 * stat.f_frsize as u64)
 }
 
+/// A thumbnail attempt that failed is remembered with the file's size at the
+/// time: a file that is still being written (or was replaced) is tried again
+/// once its size differs.
+fn failed_at_size(marker: &Path, size: u64) -> bool {
+    fs::read_to_string(marker)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        == Some(size)
+}
 pub fn valid_name(name: &str) -> bool {
     (name.starts_with("recording-")
         || name.starts_with("clip-")
@@ -667,7 +688,7 @@ mod tests {
     fn a_long_flight_is_saved_in_parts_that_follow_each_other() {
         let (c, sd) = test_controller("parts");
         let tmp = scratch("parts-tmp");
-        c.inner.lock().unwrap().cap_override = Some(40);
+        c.inner.lock_ok().cap_override = Some(40);
         c.auto_tick(&tmp, &sd, true, true);
         let first = sps(1, 20);
         let second = sps(2, 20);
@@ -749,7 +770,7 @@ mod tests {
             failed: false,
         };
         fs::write(&broken.tmp_path, b"first part so far").unwrap();
-        c.inner.lock().unwrap().auto = Some(broken);
+        c.inner.lock_ok().auto = Some(broken);
         c.feed(&sps(1, 10));
         let message = c.auto_tick(&tmp, &sd, true, true);
         assert!(message.is_some_and(|m| m.contains("saved in parts")));
@@ -800,5 +821,29 @@ mod tests {
     fn waiting_for_saves_with_nothing_pending_returns_at_once() {
         let (c, _dir) = test_controller("idle-wait");
         c.wait_for_saves();
+    }
+
+    #[test]
+    fn a_recording_that_cannot_be_thumbnailed_is_not_retried_until_it_changes() {
+        let dir = std::env::temp_dir().join(format!("ungoggled-rec-thumb-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let thumbs = dir.join("thumbs");
+        let recs = dir.join("recs");
+        fs::create_dir_all(&recs).unwrap();
+        let ctl = Controller::new(thumbs.clone());
+        let file = recs.join("flight-1.h264");
+        fs::write(&file, b"not a video").unwrap();
+        let first = ctl.list(&recs);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0]["thumbnail"], false);
+        let marker = thumbs.join("flight-1.h264.failed");
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "11");
+        assert!(failed_at_size(&marker, 11));
+        assert!(
+            !failed_at_size(&marker, 12),
+            "a changed file is tried again"
+        );
+        assert!(!failed_at_size(&thumbs.join("nothing.failed"), 11));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

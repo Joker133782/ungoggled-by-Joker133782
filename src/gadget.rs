@@ -1,3 +1,4 @@
+use crate::sync::LockExt;
 use crate::{WorkerArgs, protocol, session, video};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -6,7 +7,10 @@ use std::{
     io::{Read, Write},
     os::fd::AsRawFd,
     path::Path,
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -240,6 +244,7 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
 }
 
 pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs, aoa: Vec<String>) {
+    spawn_write_watchdog();
     let output = Arc::new(Mutex::new(output));
     let tx = output.clone();
     let shared = Arc::new(session::Shared::default());
@@ -249,12 +254,13 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs, aoa: V
         mode: args.goggles.clone(),
         g3_port: args.control_port,
         sync_time: args.sync_time,
+        clock_marker: std::path::PathBuf::from(crate::clock::SYNCED_MARKER),
         memory: Some(args.goggles_memory.clone()),
         aoa,
     };
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(300));
-        let mut send = |packet: &[u8]| write_bulk(&mut *tx.lock().unwrap(), packet);
+        let mut send = |packet: &[u8]| write_bulk_watched(&mut *tx.lock_ok(), packet);
         let result = session::drive(
             &config,
             &driver_state,
@@ -337,10 +343,18 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs, aoa: V
                                 // Goggles 2 expect replies on 0x7530; Goggles 3 on
                                 // the configured mobile control port.
                                 let port = shared.reply_port(args.control_port);
-                                write_bulk(
-                                    &mut *output.lock().unwrap(),
-                                    &protocol::wrap(port, &reply),
-                                )?;
+                                // Never wait for the writer here: while the session
+                                // thread is stuck in a write the host does not
+                                // take, waiting would stop reading the video too.
+                                match output.try_lock() {
+                                    Ok(mut out) => write_bulk_watched(
+                                        &mut *out,
+                                        &protocol::wrap(port, &reply),
+                                    )?,
+                                    Err(_) => eprintln!(
+                                        "DUML reply dropped: a USB write is still in progress"
+                                    ),
+                                }
                             }
                         }
                     }
@@ -354,6 +368,40 @@ pub(crate) fn start_bulk(mut input: File, output: File, args: WorkerArgs, aoa: V
         if let Err(e) = result {
             eprintln!("Bulk receiver: {e:#}");
             std::process::exit(1);
+        }
+    });
+}
+
+/// When the write in progress began, in `monotonic_ms` (0: none).
+static WRITE_STARTED: AtomicU64 = AtomicU64::new(0);
+/// A write to the host that takes longer than this means the host stopped
+/// reading the IN endpoint; the worker ends and is started again.
+const WRITE_STALLED_AFTER_MS: u64 = 10_000;
+fn monotonic_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+}
+/// `write_bulk`, noted for the watchdog (`write_stalled`).
+fn write_bulk_watched(writer: &mut impl Write, data: &[u8]) -> std::io::Result<()> {
+    WRITE_STARTED.store(monotonic_ms(), Ordering::Relaxed);
+    let result = write_bulk(writer, data);
+    WRITE_STARTED.store(0, Ordering::Relaxed);
+    result
+}
+fn write_stalled(started: u64, now: u64) -> bool {
+    started != 0 && now.saturating_sub(started) > WRITE_STALLED_AFTER_MS
+}
+/// Ends the worker if a USB write has been blocked for too long: nothing else
+/// would notice (the worker looks healthy and "waiting for video"), and only
+/// a restart makes the host start over.
+fn spawn_write_watchdog() {
+    thread::spawn(|| {
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            if write_stalled(WRITE_STARTED.load(Ordering::Relaxed), monotonic_ms()) {
+                eprintln!("USB write blocked for more than 10 s; restarting the receiver");
+                std::process::exit(1);
+            }
         }
     });
 }
@@ -406,6 +454,13 @@ mod tests {
         };
         super::write_bulk(&mut endpoint, b"registration").unwrap();
         assert_eq!(endpoint.sent, b"registration");
+    }
+    #[test]
+    fn a_blocked_usb_write_is_noticed_after_ten_seconds() {
+        assert!(!super::write_stalled(0, 1_000_000), "no write in progress");
+        assert!(!super::write_stalled(5_000, 14_000));
+        assert!(!super::write_stalled(5_000, 15_000));
+        assert!(super::write_stalled(5_000, 15_001));
     }
     #[test]
     fn descriptors_use_legal_speed_packet_sizes() {

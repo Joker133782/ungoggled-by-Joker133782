@@ -20,6 +20,7 @@ mod settings;
 mod storage;
 mod stream;
 mod support;
+mod sync;
 mod system_fixes;
 mod system_password;
 mod terminal;
@@ -29,6 +30,7 @@ mod v1v2;
 mod video;
 mod wifi;
 
+use crate::sync::LockExt;
 use anyhow::{Context, Result};
 use axum::{
     Json,
@@ -132,6 +134,10 @@ enum Commands {
 pub struct WorkerArgs {
     #[arg(long, default_value = "/run/dji-hdmi/video.sock")]
     video_socket: PathBuf,
+    /// USB gadget transport. `functionfs` is what the service uses. `gadgetfs`
+    /// is the old diagnostic path: it loses the accessory handshake after the
+    /// goggles reboot (FINDINGS.MD, "FunctionFS transition") and is not even
+    /// mounted on an installed Pi.
     #[arg(long,default_value="functionfs",value_parser=["functionfs","gadgetfs"])]
     transport: String,
     #[arg(long, default_value = "/dev/gadget")]
@@ -315,7 +321,8 @@ async fn main() -> Result<()> {
                 wifi_busy: Arc::new(AtomicBool::new(false)),
                 wifi_error: Arc::new(Mutex::new(None)),
                 beeper_test: Arc::new(AtomicBool::new(false)),
-                time_synced: Arc::new(AtomicBool::new(false)),
+                // A restart of the service does not make the clock wrong again.
+                time_synced: Arc::new(AtomicBool::new(clock::marked_synced())),
                 storage,
                 usb_playback,
                 usb_mpv_socket,
@@ -390,7 +397,7 @@ async fn main() -> Result<()> {
                         continue;
                     }
                     shown = lines.clone();
-                    *notice.network_notice.lock().unwrap() = match &lines {
+                    *notice.network_notice.lock_ok() = match &lines {
                         Some(lines) => assets::render_network_status(lines).and_then(|png| {
                             // tmpfs, like the other runtime-generated images
                             // (sd-card-full.png) — this is status, not content.
@@ -420,11 +427,12 @@ async fn main() -> Result<()> {
                 let mut beat = diag::Heartbeat::default();
                 let mut throttled: Option<u32> = None;
                 let mut throttled_at: Option<Instant> = None;
+                let mut time_saved_at: Option<Instant> = None;
                 while !samples.shutdown.load(Ordering::Relaxed) {
                     interval.tick().await;
                     let s = samples.snapshot();
                     let m = resources.sample();
-                    samples.history.lock().unwrap().push(&s, &m);
+                    samples.history.lock_ok().push(&s, &m);
                     if throttled_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(30)) {
                         throttled_at = Some(Instant::now());
                         throttled = tokio::task::spawn_blocking(diag::read_throttled)
@@ -432,6 +440,14 @@ async fn main() -> Result<()> {
                             .ok()
                             .flatten()
                             .or(throttled);
+                    }
+                    // While the clock is right, keep the time a reboot will start from
+                    // (`clock::remember_time`) at most five minutes behind.
+                    if clock::marked_synced()
+                        && time_saved_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(300))
+                    {
+                        time_saved_at = Some(Instant::now());
+                        clock::remember_time();
                     }
                     for line in beat.observe(&s, throttled, Instant::now()) {
                         eprintln!("{line}");
@@ -488,6 +504,9 @@ async fn main() -> Result<()> {
             if let Some(t) = tls_task {
                 let _ = t.await;
             }
+            if clock::marked_synced() {
+                clock::remember_time();
+            }
             let _ = supervisor.join();
             let _ = renderer.join();
             let _ = hardware.join();
@@ -541,7 +560,7 @@ impl App {
         let why = |e: anyhow::Error| format!("{e:#}");
         let power = |verb: &str| -> Result<String, String> {
             // Not in the middle of installing an update.
-            update::api::ensure_idle().map_err(why)?;
+            update::api::ensure_power_allowed().map_err(why)?;
             Command::new("systemctl")
                 .arg(verb)
                 .spawn()
@@ -570,7 +589,7 @@ impl App {
                         .recording
                         .start(&api::recordings_dir(self))
                         .map_err(why)?;
-                    *self.disk_warning.lock().unwrap() = None;
+                    *self.disk_warning.lock_ok() = None;
                     Ok(format!(
                         "recording started: {}",
                         started["name"].as_str().unwrap_or("")
@@ -592,14 +611,13 @@ impl App {
     fn event(&self, event: Value) {
         if let Value::Object(event) = event {
             if event.contains_key("output_frames") {
-                *self.last_output.lock().unwrap() = Some(Instant::now());
+                *self.last_output.lock_ok() = Some(Instant::now());
             }
-            let mut status = self.status.lock().unwrap();
-            let lines = self.diag.lock().unwrap().changes(
-                status.as_object().unwrap(),
-                &event,
-                Instant::now(),
-            );
+            let mut status = self.status.lock_ok();
+            let lines =
+                self.diag
+                    .lock_ok()
+                    .changes(status.as_object().unwrap(), &event, Instant::now());
             status.as_object_mut().unwrap().extend(event);
             drop(status);
             for line in lines {
@@ -608,8 +626,8 @@ impl App {
         }
     }
     fn snapshot(&self) -> Value {
-        let mut s = self.status.lock().unwrap().clone();
-        if let Some(last) = *self.last_output.lock().unwrap() {
+        let mut s = self.status.lock_ok().clone();
+        if let Some(last) = *self.last_output.lock_ok() {
             s["output_age_ms"] = json!(last.elapsed().as_millis() as u64);
             if last.elapsed() > Duration::from_secs(3) && s["hdmi"] == "playing" {
                 s["hdmi"] = json!("waiting for frames");
@@ -627,7 +645,7 @@ impl App {
                 .and_then(functionfs::udc_state)
         );
         s["build_id"] = json!(update::running_build());
-        s["disk_warning"] = json!(self.disk_warning.lock().unwrap().is_some());
+        s["disk_warning"] = json!(self.disk_warning.lock_ok().is_some());
         s["reboot_required"] = json!(system_fixes::reboot_required());
         if let Some(clock) = clock::now() {
             s["time_unix_ms"] = json!(clock.unix_ms);
@@ -636,6 +654,9 @@ impl App {
         }
         if !self.time_synced.load(Ordering::Relaxed) && clock::ntp_synchronized() {
             self.time_synced.store(true, Ordering::Relaxed);
+        }
+        if self.time_synced.load(Ordering::Relaxed) && !clock::marked_synced() {
+            clock::mark_synced();
         }
         s["time_synced"] = json!(self.time_synced.load(Ordering::Relaxed));
         s
@@ -765,12 +786,12 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                         match child.try_wait() {
                             Ok(Some(s)) => {
                                 eprintln!("Receiver worker exited: {s}");
-                                app.status.lock().unwrap()["message"] =
+                                app.status.lock_ok()["message"] =
                                     json!(format!("Receiver exited: {s}"));
                                 break;
                             }
                             Err(e) => {
-                                app.status.lock().unwrap()["message"] = json!(e.to_string());
+                                app.status.lock_ok()["message"] = json!(e.to_string());
                                 break;
                             }
                             _ => {}
@@ -786,11 +807,11 @@ fn supervise(app: App, args: WorkerArgs) -> thread::JoinHandle<()> {
                 }
                 Err(e) => {
                     eprintln!("Cannot start the receiver worker: {e}");
-                    app.status.lock().unwrap()["message"] = json!(e.to_string());
+                    app.status.lock_ok()["message"] = json!(e.to_string());
                 }
             }
             {
-                let mut s = app.status.lock().unwrap();
+                let mut s = app.status.lock_ok();
                 s["phase"] = json!(if app.enabled.load(Ordering::Relaxed) {
                     "retrying"
                 } else {

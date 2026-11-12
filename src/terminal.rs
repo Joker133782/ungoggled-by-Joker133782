@@ -26,6 +26,7 @@
 //! as the controlling terminal of a new session), so full-screen programs,
 //! job control and window resizing behave as they do over SSH. Verified on
 //! the Pi itself (static aarch64 musl build), not only on the build host.
+use crate::sync::LockExt;
 use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
@@ -132,13 +133,13 @@ pub enum Refused {
 
 impl Terminals {
     pub fn active(&self) -> bool {
-        self.inner.lock().unwrap().active.is_some()
+        self.inner.lock_ok().active.is_some()
     }
     /// Stores `ticket` for `session` (the caller's session cookie). Only call
     /// this after the password has been checked again. Refused while a
     /// terminal is open; replaces any earlier ticket of the same session.
     pub fn issue(&self, session: &str, ticket: String) -> Result<(), Refused> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         if inner.active.is_some() {
             return Err(Refused::Busy);
         }
@@ -169,7 +170,7 @@ impl Terminals {
     /// tickets can't both open a terminal. The ticket is used up by this
     /// call whether or not it was valid.
     pub fn open(&self, ticket: &str, session: &str) -> Result<Slot, Refused> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         let valid = inner.tickets.remove(ticket).is_some_and(|t| {
             t.issued.elapsed() < TICKET_TTL && crate::auth::tokens_equal(&t.session, session)
         });
@@ -678,7 +679,7 @@ mod tests {
             t.issue(&format!("session-{i}"), format!("ticket-{i}"))
                 .unwrap();
         }
-        assert!(t.inner.lock().unwrap().tickets.len() <= MAX_TICKETS);
+        assert!(t.inner.lock_ok().tickets.len() <= MAX_TICKETS);
     }
 
     fn headers(pairs: &[(header::HeaderName, &str)]) -> HeaderMap {

@@ -569,6 +569,18 @@ export default function App() {
                   Automatic (1080p) suits almost everyone.
                   {modes.some(is4k60) &&
                     " 4K60 needs the HDMI port next to USB-C and an HDMI 2.0 cable. Black picture? Choose Automatic."}
+                  {modes.some(is4k60) && (
+                    <>
+                      {" "}
+                      <a
+                        href="/wiki.html#hdmi-4k"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        More
+                      </a>
+                    </>
+                  )}
                 </p>
                 {hdmiConnectors && hdmiConnectors.length > 1 && (
                   <>
@@ -788,6 +800,9 @@ export default function App() {
                 </button>
                 <a className="button" href="/api/support-bundle">
                   <IconDownload /> Download diagnostics
+                </a>
+                <a href="/wiki.html#log" target="_blank" rel="noreferrer">
+                  Help: log &amp; diagnostics
                 </a>
               </div>
             </section>

@@ -67,14 +67,29 @@ build runs the same command inside the image (`--offline --strict
 
 - `config.txt` (`/boot/firmware/config.txt`): a marked block at the end
   (`[all]`, `core_freq_min=500`, `hdmi_enable_4kp60=1`,
-  `dtoverlay=gpio-fan,gpiopin=14,temp=60000`, `dtoverlay=ungoggled-hevc-cma`) and
+  `dtoverlay=gpio-fan,gpiopin=14,temp=60000`, `dtoverlay=ungoggled-hevc-cma`,
+  and an empty `dtoverlay=` that ends the overlay's parameter scope, so a
+  `dtparam=` added below the block still reaches the base device tree) and
   `cma-size=0x28000000` on the single `vc4-kms-v3d` line if it is missing or
   smaller. Idempotent, written atomically (temp file, fsync, rename, directory
   fsync); `config.txt.ungoggled-orig` (before the first change) and
-  `config.txt.ungoggled-prev` (before the latest one) are kept. A file with an
-  unexpected shape, or that cannot be read or written, is left alone and
-  logged. A value someone else set (`core_freq_min`, `hdmi_enable_4kp60`, a
-  `gpio-fan` overlay of any pin or temperature, a bigger CMA pool) wins.
+  `config.txt.ungoggled-prev` (before the latest one) are kept. A
+  `config.txt` that is missing, empty or contains NUL bytes (a power cut
+  while FAT renames it) is restored from `config.txt.ungoggled-prev` if that
+  one is usable (a damaged file is kept as `config.txt.ungoggled-damaged`);
+  any other unexpected shape, or a file that cannot be read or written, is
+  left alone and logged. A value someone else set (`core_freq_min`,
+  `hdmi_enable_4kp60`, a `gpio-fan` overlay of any pin or temperature, a
+  bigger CMA pool) wins.
+- The fan line is left out (and taken out again) while GPIO 14 has another
+  user: any pin in `/var/lib/dji-hdmi/settings.json` (beeper, LEDs, power
+  button, GPIO buttons) is 14, or `enable_uart=1` puts the serial console
+  there. To switch it off for good, add the line `# ungoggled: no-fan`
+  anywhere in `config.txt` outside the block (a comment, so the firmware
+  ignores it; the block itself is rewritten on every start). The settings
+  are read before the service starts, so a pin changed in the web interface
+  counts from the next service start (and takes effect after the next
+  reboot).
 - Patched `rpi-hevc-dec` in `/lib/modules/RELEASE/updates/ungoggled/` plus
   `overlays/ungoggled-hevc-cma.dtbo`, only if the kernel release, the
   `linux-image-RELEASE` package version and the stock module's vermagic match
@@ -82,14 +97,19 @@ build runs the same command inside the image (`--offline --strict
   Overlay file before the line; `depmod`, then `modinfo -n` must name our copy.
   The stock module is never touched. If after a boot no decoder module is
   loaded and `modprobe` fails, this module build is switched off for good and
-  the stock one loaded. While installed, every installed `linux-image-*`,
+  the stock one loaded. An install that fails (depmod, `modinfo -n` naming
+  another file) is retried once per boot, not before every service start
+  (`enable-module` retries at once); the overlay file is only written once
+  the module is in place. While installed, every installed `linux-image-*`,
   `linux-headers-*` and `linux-kbuild-*` package is on `apt-mark hold`
   (released again when the module goes).
 - Nothing reboots. `/api/status` reports `reboot_required` (configured but not
   yet running: `vcgencmd get_config core_freq_min` and `hdmi_enable_4kp60`,
   the `gpio-fan` node in `/proc/device-tree`, the `linux,cma` size and
   the decoder's `memory-region` in `/proc/device-tree`, the loaded module's
-  `srcversion`), and the web interface asks for a reboot.
+  `srcversion`; numbers compared as numbers), and the web interface asks for
+  a reboot. The service looks again once a minute and recomputes this when
+  `config.txt`, the module or overlay file, or the loaded module changed.
 - A failure here never stops the service: `prepare-pi.sh` only logs it. After
   a switch back to a release without the command (the factory release keeps
   the current `prepare-pi.sh`), the fixes stay as they are and the old binary

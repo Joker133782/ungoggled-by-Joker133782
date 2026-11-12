@@ -1,3 +1,4 @@
+use crate::sync::LockExt;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -194,7 +195,14 @@ impl Store {
             write_if_changed(&crate::assets::thumb_path(&dir.join("images"), id), poster)?;
         }
         let value = match fs::read(dir.join("settings.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(value) => value,
+                // A damaged or hand-edited file (or one written by a newer
+                // release) must not keep the service from starting: no picture
+                // and no console, restarted every few seconds, with nothing but
+                // SSH to fix it.
+                Err(e) => recover_damaged(&dir, &e.to_string()),
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
             Err(e) => return Err(e.into()),
         };
@@ -210,7 +218,7 @@ impl Store {
         })
     }
     pub fn get(&self) -> Settings {
-        self.value.lock().unwrap().clone()
+        self.value.lock_ok().clone()
     }
     pub fn save(&self, value: Settings) -> Result<()> {
         if !valid_mode(&value.hdmi_mode) {
@@ -237,7 +245,7 @@ impl Store {
             bail!("GPIO pins must all be different");
         }
         // Serialize concurrent saves together with the file replacement.
-        let mut current = self.value.lock().unwrap();
+        let mut current = self.value.lock_ok();
         atomic_write(
             &self.dir.join("settings.json"),
             &serde_json::to_vec_pretty(&value)?,
@@ -245,6 +253,45 @@ impl Store {
         *current = value;
         Ok(())
     }
+}
+/// `settings.json` could not be read as the current schema: keep a copy of it
+/// (`settings.json.bad-<time>`, the newest three), take over every field the
+/// migration still understands, and write the result back so the next start is
+/// clean. Never fails: the worst case is the defaults.
+fn recover_damaged(dir: &Path, why: &str) -> Settings {
+    let path = dir.join("settings.json");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    eprintln!(
+        "settings.json cannot be read ({why}); keeping a copy and using what can be recovered"
+    );
+    let _ = fs::copy(&path, dir.join(format!("settings.json.bad-{stamp}")));
+    let mut copies: Vec<PathBuf> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("settings.json.bad-"))
+        })
+        .collect();
+    copies.sort();
+    while copies.len() > 3 {
+        let _ = fs::remove_file(copies.remove(0));
+    }
+    let migrated = dir.join("settings.json.migrated");
+    let recovered = migrate(dir, &migrated)
+        .ok()
+        .and_then(|_| fs::read(&migrated).ok())
+        .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
+        .unwrap_or_default();
+    let _ = fs::remove_file(&migrated);
+    if let Ok(bytes) = serde_json::to_vec_pretty(&recovered) {
+        let _ = atomic_write(&path, &bytes);
+    }
+    recovered
 }
 /// Fallback library entries: still images (`.png`) and looped videos (`.h264`).
 pub fn valid_id(id: &str) -> bool {
@@ -358,9 +405,13 @@ fn remove_stale_temp_files(dir: &Path) {
     for folder in [dir.to_path_buf(), dir.join("images")] {
         for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
+            // `.tmp-<pid>` from `atomic_write`; `.upload-<stamp>.mp4/.part` from
+            // an idle-screen video conversion that was cut short (up to 64 MiB each).
             let stale = name
                 .rsplit_once(".tmp-")
-                .is_some_and(|(_, pid)| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
+                .is_some_and(|(_, pid)| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+                || (name.starts_with(".upload-")
+                    && (name.ends_with(".mp4") || name.ends_with(".part")));
             if stale && entry.path().is_file() && old(&entry) {
                 let _ = fs::remove_file(entry.path());
             }
@@ -813,6 +864,33 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn a_cut_short_video_conversion_is_cleaned_up_after_a_minute() {
+        let dir = scratch_dir("upload-leftover");
+        fs::create_dir_all(dir.join("images")).unwrap();
+        let old_mp4 = dir.join("images/.upload-1700000000.mp4");
+        let old_part = dir.join("images/.upload-1700000000.part");
+        let fresh = dir.join("images/.upload-1800000000.mp4");
+        let user_file = dir.join("images/my-upload.mp4");
+        for f in [&old_mp4, &old_part, &fresh, &user_file] {
+            fs::write(f, b"x").unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        for f in [&old_mp4, &old_part, &user_file] {
+            fs::File::options()
+                .write(true)
+                .open(f)
+                .unwrap()
+                .set_modified(long_ago)
+                .unwrap();
+        }
+        remove_stale_temp_files(&dir);
+        assert!(!old_mp4.exists() && !old_part.exists());
+        assert!(fresh.exists(), "a conversion may be running");
+        assert!(user_file.exists(), "only .upload-* names are ours");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     fn button(pin: u8, action: ButtonAction) -> GpioButton {
         GpioButton {
             pin,
@@ -1000,5 +1078,65 @@ mod tests {
         json.as_object_mut().unwrap().remove("goggles");
         let old: Settings = serde_json::from_value(json).unwrap();
         assert_eq!(old.goggles, "auto");
+    }
+
+    #[test]
+    fn a_damaged_settings_file_does_not_stop_the_service() {
+        let dir = std::env::temp_dir().join(format!("ungoggled-damaged-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // Not JSON at all.
+        fs::write(dir.join("settings.json"), "{ this is not json").unwrap();
+        let store = Store::open(dir.clone()).unwrap();
+        assert_eq!(store.get(), Settings::default());
+        let copies: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.json.bad-")
+            })
+            .collect();
+        assert_eq!(copies.len(), 1, "the damaged file is kept");
+        assert_eq!(fs::read(copies[0].path()).unwrap(), b"{ this is not json");
+        // The file on disk is clean again.
+        assert_eq!(
+            serde_json::from_slice::<Settings>(&fs::read(dir.join("settings.json")).unwrap())
+                .unwrap(),
+            Settings::default()
+        );
+        assert!(!dir.join("settings.json.migrated").exists());
+    }
+
+    #[test]
+    fn a_settings_file_with_a_field_this_build_does_not_know_keeps_the_rest() {
+        let dir = std::env::temp_dir().join(format!("ungoggled-newer-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // Written by a later release (a downgrade): one unknown field, the owner's real choices.
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"hdmi_mode":"1920x1080@60","goggles":"goggles2","from_the_future":1}"#,
+        )
+        .unwrap();
+        let store = Store::open(dir.clone()).unwrap();
+        assert_eq!(store.get().hdmi_mode, "1920x1080@60");
+        assert_eq!(store.get().goggles, "goggles2");
+        // Many restarts do not pile up copies.
+        for _ in 0..6 {
+            fs::write(dir.join("settings.json"), "broken").unwrap();
+            Store::open(dir.clone()).unwrap();
+        }
+        let copies = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.json.bad-")
+            })
+            .count();
+        assert!(copies <= 3, "{copies} copies");
     }
 }

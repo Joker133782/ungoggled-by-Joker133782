@@ -120,7 +120,7 @@ pub fn run(args: &WorkerArgs) -> Result<()> {
         .wait()
         .context("Cannot open goggles USB device")?;
     let interface = device
-        .claim_interface(INTERFACE)
+        .detach_and_claim_interface(INTERFACE)
         .wait()
         .context("Cannot claim goggles bulk interface")?;
     let descriptor = interface

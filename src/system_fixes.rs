@@ -63,10 +63,18 @@ pub const HDMI_4KP60: &str = "1";
 /// The case or hat fan on a GPIO pin, switched on by the kernel's `gpio-fan`
 /// overlay (what raspi-config's "Performance Options > Fan" writes) from this
 /// temperature, in millidegrees Celsius. A Pi without a fan on GPIO 14 is not
-/// affected: the pin carries the unused UART transmit line.
+/// affected: the pin carries the unused UART transmit line. Left out when the
+/// app's settings use GPIO 14, when `enable_uart=1` puts the serial console
+/// there, or when `config.txt` carries the [`NO_FAN`] line outside the block.
 pub const FAN_GPIO: u32 = 14;
 pub const FAN_ON_MILLI_C: u32 = 60_000;
 const FAN_OVERLAY: &str = "gpio-fan";
+/// The owner's opt-out from our fan line: this comment anywhere outside the
+/// managed block (the firmware ignores it, and it survives every run).
+pub const NO_FAN: &str = "# ungoggled: no-fan";
+/// The app's settings, for the GPIO pins they use (default `--data-dir`).
+const SETTINGS: &str = "var/lib/dji-hdmi/settings.json";
+const BOOT_ID: &str = "proc/sys/kernel/random/boot_id";
 /// 640 MiB default CMA pool (`vc4-kms-v3d,cma-size=`). The default 512 MiB is
 /// too small for GStreamer `v4l2slh265dec`, which pre-allocates a DPB sized
 /// from the stream's declared level before the decoder gets its own ~45 MiB
@@ -158,10 +166,21 @@ struct State {
     /// Packages this code put on hold, so only those get released again.
     #[serde(default)]
     held: Vec<String>,
+    /// The last failed install of this module build, so a failure that keeps
+    /// happening (a foreign depmod rule, a full root filesystem) is retried
+    /// once per boot instead of before every service start.
+    #[serde(default)]
+    install_failed: Option<Failed>,
 }
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 struct Disabled {
     module_sha256: String,
+    reason: String,
+}
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+struct Failed {
+    module_sha256: String,
+    boot_id: String,
     reason: String,
 }
 impl State {
@@ -182,6 +201,33 @@ impl State {
             .filter(|d| d.module_sha256 == module_sha256())
             .map(|d| d.reason.as_str())
     }
+    /// Why this module build failed to install earlier in this boot, if so.
+    fn failed_this_boot(&self, o: &Options) -> Option<&str> {
+        let boot = boot_id(o)?;
+        self.install_failed
+            .as_ref()
+            .filter(|f| f.module_sha256 == module_sha256() && f.boot_id == boot)
+            .map(|f| f.reason.as_str())
+    }
+}
+/// The running boot's id; `None` offline (an image build always tries).
+fn boot_id(o: &Options) -> Option<String> {
+    if !o.live {
+        return None;
+    }
+    let id = fs::read_to_string(o.root.join(BOOT_ID)).ok()?;
+    Some(id.trim().to_owned()).filter(|id| !id.is_empty())
+}
+/// Save the state if it changed since the last save. A failed save is noted
+/// once and not retried unless the state changes again.
+fn save_state(o: &Options, state: &State, saved: &mut State, r: &mut Report) {
+    if state == saved {
+        return;
+    }
+    if let Err(e) = state.save(o) {
+        r.note(format!("Cannot save {STATE}: {e:#}"));
+    }
+    *saved = state.clone();
 }
 
 /// What a run did, one line per fix, plus what is still not in place.
@@ -221,21 +267,35 @@ pub fn embedded_srcversion() -> Option<String> {
 pub fn apply(o: &Options, host: &impl Host) -> Report {
     let mut r = Report::default();
     let mut state = State::load(o);
-    let before = state.clone();
+    let mut saved = state.clone();
     match eligible(o, host, &state) {
         Eligible::Yes => {
-            let module = match install_module(o, host) {
-                Ok(changed) => {
-                    r.note(if changed {
-                        "HEVC decoder module: installed (active after the next reboot)"
-                    } else {
-                        "HEVC decoder module: in place"
-                    });
-                    true
-                }
-                Err(e) => {
-                    r.note(format!("HEVC decoder module: not installed ({e:#})"));
-                    false
+            let module = if let Some(reason) = state.failed_this_boot(o) {
+                r.note(format!(
+                    "HEVC decoder module: not installed (failed earlier in this boot: {reason}; \
+                     tried again after the next reboot or with system-fixes enable-module)"
+                ));
+                false
+            } else {
+                match install_module(o, host) {
+                    Ok(changed) => {
+                        r.note(if changed {
+                            "HEVC decoder module: installed (active after the next reboot)"
+                        } else {
+                            "HEVC decoder module: in place"
+                        });
+                        state.install_failed = None;
+                        true
+                    }
+                    Err(e) => {
+                        r.note(format!("HEVC decoder module: not installed ({e:#})"));
+                        state.install_failed = boot_id(o).map(|boot_id| Failed {
+                            module_sha256: module_sha256(),
+                            boot_id,
+                            reason: format!("{e:#}"),
+                        });
+                        false
+                    }
                 }
             };
             configure(o, module, &mut r);
@@ -243,6 +303,10 @@ pub fn apply(o: &Options, host: &impl Host) -> Report {
                 remove_module(o, host, &mut r);
             }
             hold(o, host, &mut state, module, &mut r);
+            // Record the hold now: the module check below can take up to
+            // 30 s, and a run killed before the save would forget which
+            // packages are ours to release.
+            save_state(o, &state, &mut saved, &mut r);
             if module && o.live {
                 check_loaded(o, host, &mut state, &mut r);
             }
@@ -258,14 +322,16 @@ pub fn apply(o: &Options, host: &impl Host) -> Report {
             // A check that could not run says nothing about the module:
             // leave whatever is installed as it is and retry next start.
             r.note(format!("HEVC decoder module: left as it is ({reason})"));
-            configure(o, o.installed_module().is_file(), &mut r);
+            // The overlay line only with its file: the firmware skips a
+            // missing overlay and the memory pool would stay "pending".
+            configure(
+                o,
+                o.installed_module().is_file() && o.overlay_file().is_file(),
+                &mut r,
+            );
         }
     }
-    if state != before
-        && let Err(e) = state.save(o)
-    {
-        r.note(format!("Cannot save {STATE}: {e:#}"));
-    }
+    save_state(o, &state, &mut saved, &mut r);
     if !o.installed_module().is_file() {
         r.missing.push("module");
     }
@@ -334,16 +400,12 @@ fn eligible(o: &Options, host: &impl Host, state: &State) -> Eligible {
     Yes
 }
 
-/// Overlay file first, then the module and `depmod`; the `config.txt` line
-/// follows only after this succeeded. Returns whether anything changed.
+/// The module and `depmod`, then the overlay file (only once the module is
+/// known to be chosen, so a failing install never writes the boot
+/// partition); the `config.txt` line follows only after this succeeded.
+/// Returns whether anything changed.
 fn install_module(o: &Options, host: &impl Host) -> Result<bool> {
-    let overlay = o.overlay_file();
     let mut changed = false;
-    if fs::read(&overlay).ok().as_deref() != Some(OVERLAY) {
-        fs::create_dir_all(overlay.parent().unwrap())?;
-        replace_file(&overlay, OVERLAY, || Ok(())).context("overlay file")?;
-        changed = true;
-    }
     let target = o.installed_module();
     if fs::read(&target).ok().as_deref() != Some(MODULE) {
         fs::create_dir_all(target.parent().unwrap())?;
@@ -373,6 +435,12 @@ fn install_module(o: &Options, host: &impl Host) -> Result<bool> {
             .ends_with(&format!("{MODULE_DIR}/{MODULE_FILE}"))
         {
             bail!("modprobe would load {} instead", chosen.trim());
+        }
+        let overlay = o.overlay_file();
+        if fs::read(&overlay).ok().as_deref() != Some(OVERLAY) {
+            fs::create_dir_all(overlay.parent().unwrap())?;
+            replace_file(&overlay, OVERLAY, || Ok(())).context("overlay file")?;
+            changed = true;
         }
         Ok(())
     })();
@@ -533,18 +601,12 @@ fn check_loaded(o: &Options, host: &impl Host, state: &mut State, r: &mut Report
 
 fn configure(o: &Options, overlay: bool, r: &mut Report) {
     let path = o.boot().join("config.txt");
-    let old = match fs::read(&path) {
-        Ok(b) => b,
-        Err(e) => {
-            r.note(format!(
-                "config.txt: skipped, cannot read {} ({e})",
-                path.display()
-            ));
-            r.missing.push("config");
-            return;
-        }
+    let Some(old) = read_config(&path, r) else {
+        r.missing.push("config");
+        return;
     };
-    let edit = match edit_config(&old, overlay) {
+    let fan_pin_taken = settings_pins(o).contains(&u64::from(FAN_GPIO));
+    let edit = match edit_config(&old, overlay, fan_pin_taken) {
         Ok(e) => e,
         Err(reason) => {
             r.note(format!(
@@ -566,6 +628,90 @@ fn configure(o: &Options, overlay: bool, r: &mut Report) {
             r.missing.push("config");
         }
     }
+}
+
+/// The current `config.txt`. Restored from `config.txt.ungoggled-prev` when
+/// it is gone, empty or contains NUL bytes (what a power cut during a write
+/// on the FAT boot partition can leave; without it the Pi boots without vc4
+/// and dwc2) and that backup is one this code would edit. A damaged file is
+/// kept as `config.txt.ungoggled-damaged`. Any other unexpected shape
+/// (too big, not UTF-8, a broken block) may be the owner's doing and is left
+/// alone.
+fn read_config(path: &Path, r: &mut Report) -> Option<Vec<u8>> {
+    let read = fs::read(path);
+    let lost = match &read {
+        Ok(b) => b.is_empty() || b.contains(&0),
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    };
+    let prev = path.with_file_name("config.txt.ungoggled-prev");
+    if lost && prev.is_file() {
+        match restore_config(path, &prev, read.as_deref().ok()) {
+            Ok(b) => {
+                r.note(
+                    "config.txt: was missing, empty or damaged; restored from config.txt.ungoggled-prev",
+                );
+                return Some(b);
+            }
+            Err(e) => r.note(format!(
+                "config.txt: cannot restore from config.txt.ungoggled-prev ({e:#})"
+            )),
+        }
+    }
+    match read {
+        Ok(b) => Some(b),
+        Err(e) => {
+            r.note(format!(
+                "config.txt: skipped, cannot read {} ({e})",
+                path.display()
+            ));
+            None
+        }
+    }
+}
+fn restore_config(path: &Path, prev: &Path, damaged: Option<&[u8]>) -> Result<Vec<u8>> {
+    let backup = fs::read(prev)?;
+    if let Err(e) = edit_config(&backup, false, false) {
+        bail!("unexpected content in the backup ({e})");
+    }
+    if let Some(d) = damaged.filter(|d| !d.is_empty()) {
+        replace_file(
+            &path.with_file_name("config.txt.ungoggled-damaged"),
+            d,
+            || Ok(()),
+        )
+        .context("keeping the damaged file")?;
+    }
+    replace_file(path, &backup, || Ok(()))?;
+    if fs::read(path)? != backup {
+        bail!("read back differs");
+    }
+    Ok(backup)
+}
+
+/// GPIO pins the app's settings use. Read loosely (any `*_pin` number and
+/// every button's `pin`), so a field this release does not know still
+/// counts; a missing or damaged file is simply no pins. A field missing
+/// from the file means the app's default, and no default is GPIO 14.
+fn settings_pins(o: &Options) -> Vec<u64> {
+    let Some(serde_json::Value::Object(s)) = fs::read(o.root.join(SETTINGS))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+    else {
+        return Vec::new();
+    };
+    let mut pins: Vec<u64> = s
+        .iter()
+        .filter(|(k, _)| k.ends_with("_pin"))
+        .filter_map(|(_, v)| v.as_u64())
+        .collect();
+    if let Some(buttons) = s.get("buttons").and_then(|b| b.as_array()) {
+        pins.extend(
+            buttons
+                .iter()
+                .filter_map(|b| b.get("pin").and_then(serde_json::Value::as_u64)),
+        );
+    }
+    pins
 }
 
 /// Keep the file from before the first change and the one before the latest
@@ -731,6 +877,13 @@ fn plain_setting(
         None => true,
     }
 }
+/// The [`NO_FAN`] comment, with any spacing and in any case.
+fn is_no_fan_marker(line: &str) -> bool {
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    line.trim()
+        .strip_prefix('#')
+        .is_some_and(|rest| words(rest).eq_ignore_ascii_case(&words(&NO_FAN[1..])))
+}
 fn is_vc4(value: &str) -> bool {
     matches!(
         value.split(',').next().map(str::trim),
@@ -740,7 +893,8 @@ fn is_vc4(value: &str) -> bool {
 
 /// The new `config.txt`. `Err` means the file has a shape this code does not
 /// edit; individual fixes it cannot apply safely are skipped with a note.
-fn edit_config(old: &[u8], overlay: bool) -> Result<Edit, String> {
+/// `fan_pin_taken`: the app's settings use the fan's GPIO pin.
+fn edit_config(old: &[u8], overlay: bool, fan_pin_taken: bool) -> Result<Edit, String> {
     if old.is_empty() || old.len() > MAX_CONFIG || old.contains(&0) {
         return Err(format!("{} bytes", old.len()));
     }
@@ -795,17 +949,38 @@ fn edit_config(old: &[u8], overlay: bool) -> Result<Edit, String> {
         };
     // The fan: any gpio-fan overlay outside our block (what raspi-config
     // wrote, say) is the owner's choice of pin and temperature and stays.
+    // Our line also stays out when GPIO 14 has another user: the app's own
+    // settings, the serial console (`enable_uart=1`), or the owner's opt-out.
     let fan = {
         let elsewhere = user()
             .filter(|l| l.applies())
             .filter_map(|l| l.setting())
             .any(|(k, v)| k == "dtoverlay" && overlay_name(v) == Some(FAN_OVERLAY));
-        if elsewhere {
-            notes.push(format!(
-                "{FAN_OVERLAY}: already listed outside the ungoggled block"
-            ));
+        let opted_out = user().any(|l| is_no_fan_marker(l.text));
+        let uart = user()
+            .filter(|l| l.applies())
+            .filter_map(|l| l.setting())
+            .filter(|(k, _)| *k == "enable_uart")
+            .map(|(_, v)| v)
+            .next_back()
+            == Some("1");
+        let skipped = if elsewhere {
+            Some("already listed outside the ungoggled block".to_owned())
+        } else if opted_out {
+            Some(format!("skipped: '{NO_FAN}' is in config.txt"))
+        } else if fan_pin_taken {
+            Some(format!("skipped: GPIO {FAN_GPIO} is used by the settings"))
+        } else if uart {
+            Some(format!(
+                "skipped: enable_uart=1 puts the serial console on GPIO {FAN_GPIO}"
+            ))
+        } else {
+            None
+        };
+        if let Some(why) = &skipped {
+            notes.push(format!("{FAN_OVERLAY}: {why}"));
         }
-        !elsewhere
+        skipped.is_none()
     };
     // The overlay line exists only together with the patched module.
     let overlay = overlay && {
@@ -902,6 +1077,12 @@ fn edit_config(old: &[u8], overlay: bool) -> Result<Edit, String> {
         block.push(format!("dtoverlay={OVERLAY_NAME}"));
         notes.push(format!("dtoverlay={OVERLAY_NAME}: listed"));
     }
+    // A `dtparam=` line is a parameter of the most recent `dtoverlay=` line;
+    // an empty one ends that scope, so lines added below the block (by hand
+    // or by raspi-config) still reach the base device tree.
+    if block.iter().any(|l| l.starts_with("dtoverlay=")) {
+        block.push("dtoverlay=".to_owned());
+    }
     let block: Vec<String> = if block.is_empty() {
         Vec::new()
     } else {
@@ -969,13 +1150,19 @@ pub fn pending(root: &Path, host: &impl Host) -> Vec<String> {
     let core = effective("core_freq_min");
     if let Some(want) = core.last()
         && let Ok(out) = host.run("vcgencmd", &["get_config", "core_freq_min"])
-        && out.trim().strip_prefix("core_freq_min=") != Some(want.as_str())
+        && !out
+            .trim()
+            .strip_prefix("core_freq_min=")
+            .is_some_and(|v| same_value(want, v))
     {
         reasons.push(format!("core_freq_min={want} not active ({})", out.trim()));
     }
     if let Some(want) = effective("hdmi_enable_4kp60").last()
         && let Ok(out) = host.run("vcgencmd", &["get_config", "hdmi_enable_4kp60"])
-        && out.trim().strip_prefix("hdmi_enable_4kp60=") != Some(want.as_str())
+        && !out
+            .trim()
+            .strip_prefix("hdmi_enable_4kp60=")
+            .is_some_and(|v| same_value(want, v))
     {
         reasons.push(format!(
             "hdmi_enable_4kp60={want} not active ({})",
@@ -1051,24 +1238,73 @@ pub fn pending(root: &Path, host: &impl Host) -> Vec<String> {
     reasons
 }
 
-static PENDING: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-/// Work out once, in the background, whether this boot still lacks fixes
-/// that are already configured. Nothing changes them while the service
-/// runs: they are applied before it starts and act only after a reboot.
+/// Whether the firmware's answer is the configured value: compared as
+/// numbers where both are numbers (`0500`, `0x1f4`), as text otherwise.
+fn same_value(want: &str, running: &str) -> bool {
+    let number = |s: &str| {
+        let s = s.trim();
+        match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            Some(hex) => u64::from_str_radix(hex, 16).ok(),
+            None => s.parse::<u64>().ok(),
+        }
+    };
+    match (number(want), number(running)) {
+        (Some(a), Some(b)) => a == b,
+        _ => want.trim() == running.trim(),
+    }
+}
+
+/// Size and modification time of what [`pending`] compares on the
+/// configured side, plus whether a decoder module is loaded: when none of
+/// it changes, neither does the answer.
+fn pending_inputs(root: &Path) -> Vec<Option<(std::time::SystemTime, u64)>> {
+    let modules = root.join("lib/modules").join(KERNEL_RELEASE);
+    [
+        root.join(BOOT).join("config.txt"),
+        root.join(BOOT)
+            .join("overlays")
+            .join(format!("{OVERLAY_NAME}.dtbo")),
+        modules.join(MODULE_DIR).join(MODULE_FILE),
+        root.join("sys/module/rpi_hevc_dec/srcversion"),
+    ]
+    .iter()
+    .map(|p| {
+        let m = fs::metadata(p).ok()?;
+        Some((m.modified().ok()?, m.len()))
+    })
+    .collect()
+}
+
+static PENDING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Work out in the background whether this boot still lacks fixes that are
+/// already configured. They are applied before the service starts and act
+/// only after a reboot, but `system-fixes remove-module`/`enable-module` run
+/// by hand change them while it runs; so the inputs are looked at once a
+/// minute and the answer is worked out again when they changed.
 pub fn watch() {
     std::thread::spawn(|| {
-        let reasons = pending(Path::new("/"), &System);
-        if !reasons.is_empty() {
-            eprintln!(
-                "Reboot needed to finish system fixes: {}",
-                reasons.join("; ")
-            );
+        let root = Path::new("/");
+        let mut seen = None;
+        loop {
+            let inputs = pending_inputs(root);
+            if seen.as_ref() != Some(&inputs) {
+                let reasons = pending(root, &System);
+                let mut current = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+                if !reasons.is_empty() && *current != reasons {
+                    eprintln!(
+                        "Reboot needed to finish system fixes: {}",
+                        reasons.join("; ")
+                    );
+                }
+                *current = reasons;
+                seen = Some(inputs);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(60));
         }
-        let _ = PENDING.set(reasons);
     });
 }
 pub fn reboot_required() -> bool {
-    PENDING.get().is_some_and(|r| !r.is_empty())
+    !PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }
 
 /// `ungoggled system-fixes ...`
@@ -1103,6 +1339,8 @@ pub fn command(
                 module_sha256: module_sha256(),
                 reason: "removed by hand (system-fixes enable-module turns it back on)".into(),
             });
+            // Either way the next install attempt starts from scratch.
+            state.install_failed = None;
             state.save(&o)?;
         }
         "apply" => {}

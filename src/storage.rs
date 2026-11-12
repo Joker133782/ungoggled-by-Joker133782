@@ -4,6 +4,7 @@
 //! USB-C controller runs in one fixed role at a time, and dynamically
 //! switching it between the goggles' accessory/gadget mode and acting as a
 //! host for mass storage is not something this project relies on.
+use crate::sync::LockExt;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -83,7 +84,7 @@ impl Store {
     /// `(files found so far, files with a thumbnail decided)` while a scan
     /// from `list_videos` is in progress, `None` otherwise.
     pub fn scan_progress(&self) -> Option<(usize, usize)> {
-        *self.scan.lock().unwrap()
+        *self.scan.lock_ok()
     }
     /// The first drive currently mounted read-write (i.e. mounted because
     /// `record_to_usb` is on), for recordings to land on instead of the SD
@@ -104,8 +105,8 @@ impl Store {
     /// background (see `scan_progress`), so a drive full of action-cam
     /// footage never makes the list itself wait on it.
     pub fn list_videos(&self) -> Vec<Value> {
-        let mounted = self.mounted.lock().unwrap().clone();
-        let mut registry = self.videos.lock().unwrap();
+        let mounted = self.mounted.lock_ok().clone();
+        let mut registry = self.videos.lock_ok();
         registry.clear();
         let mut found: Vec<_> = mounted
             .iter()
@@ -155,10 +156,10 @@ impl Store {
     /// call is still running, or a USB video is currently playing — either
     /// way, a later rescan picks up anything still missing.
     fn spawn_thumbnailing(&self, missing: Vec<(PathBuf, PathBuf)>) {
-        if missing.is_empty() || self.usb_playback.lock().unwrap().is_some() {
+        if missing.is_empty() || self.usb_playback.lock_ok().is_some() {
             return;
         }
-        let mut running = self.thumbnailing.lock().unwrap();
+        let mut running = self.thumbnailing.lock_ok();
         if *running {
             return;
         }
@@ -168,17 +169,17 @@ impl Store {
         let thumbnailing = self.thumbnailing.clone();
         let usb_playback = self.usb_playback.clone();
         let total = missing.len();
-        *scan.lock().unwrap() = Some((0, total));
+        *scan.lock_ok() = Some((0, total));
         thread::spawn(move || {
             for (done, (video, dest)) in missing.into_iter().enumerate() {
-                if usb_playback.lock().unwrap().is_some() {
+                if usb_playback.lock_ok().is_some() {
                     break;
                 }
                 ensure_thumbnail(&video, &dest);
-                *scan.lock().unwrap() = Some((done + 1, total));
+                *scan.lock_ok() = Some((done + 1, total));
             }
-            *scan.lock().unwrap() = None;
-            *thumbnailing.lock().unwrap() = false;
+            *scan.lock_ok() = None;
+            *thumbnailing.lock_ok() = false;
         });
     }
     /// Resolve an id from the most recent `list_videos` call back to a path.
@@ -301,7 +302,7 @@ pub fn start(
             reconcile(&base, &watched, settings.get().record_to_usb, &mut failed);
             thread::sleep(Duration::from_secs(2));
         }
-        let drives: Vec<Mounted> = watched.lock().unwrap().drain(..).collect();
+        let drives: Vec<Mounted> = watched.lock_ok().drain(..).collect();
         for drive in drives {
             unmount(&drive, false);
         }
@@ -329,7 +330,7 @@ fn reconcile(
     // Decide under the lock, act without it.
     let mut stale: Vec<(Mounted, bool)> = Vec::new();
     {
-        let mut guard = mounted.lock().unwrap();
+        let mut guard = mounted.lock_ok();
         let mut keep = Vec::with_capacity(guard.len());
         for m in guard.drain(..) {
             if !present.contains(&m.device) {
@@ -350,7 +351,7 @@ fn reconcile(
             // it stays mounted in the mode it really has, and is tried again
             // on the next pass. Forgetting it would let the code below adopt
             // it as if it had already been remounted in the new mode.
-            mounted.lock().unwrap().push(m);
+            mounted.lock_ok().push(m);
         }
     }
     failed.retain(|device, _| present.contains(device));
@@ -371,7 +372,7 @@ fn reconcile(
         // read-only is not treated as writable; a mode other than the wanted
         // one is corrected on a later pass.
         if let Some((existing, rw)) = existing_mount(&device) {
-            mounted.lock().unwrap().push(Mounted {
+            mounted.lock_ok().push(Mounted {
                 device,
                 mountpoint: existing,
                 read_write: rw,
@@ -394,7 +395,7 @@ fn reconcile(
             .is_ok_and(|o| o.status.success());
         if ok {
             failed.remove(&device);
-            mounted.lock().unwrap().push(Mounted {
+            mounted.lock_ok().push(Mounted {
                 device,
                 mountpoint,
                 read_write,
@@ -689,12 +690,12 @@ mod tests {
         // A video is playing: no pass starts at all, not even a "missing" one.
         store.spawn_thumbnailing(missing.clone());
         assert!(store.scan_progress().is_none());
-        assert!(!*store.thumbnailing.lock().unwrap());
+        assert!(!*store.thumbnailing.lock_ok());
 
         // Once playback ends, a pass is free to run.
-        *store.usb_playback.lock().unwrap() = None;
+        *store.usb_playback.lock_ok() = None;
         store.spawn_thumbnailing(missing);
-        assert!(*store.thumbnailing.lock().unwrap());
+        assert!(*store.thumbnailing.lock_ok());
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while store.scan_progress().is_some() {
             assert!(std::time::Instant::now() < deadline, "pass never finished");

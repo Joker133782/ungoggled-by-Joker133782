@@ -69,6 +69,8 @@ struct Fake {
     dpkg_ok: bool,
     held: RefCell<Vec<String>>,
     vcgencmd: String,
+    /// The state file as it was on disk when `modprobe` last ran.
+    state_at_modprobe: RefCell<Option<String>>,
 }
 impl Fake {
     fn new(root: &Path) -> Self {
@@ -82,6 +84,7 @@ impl Fake {
             dpkg_ok: true,
             held: RefCell::default(),
             vcgencmd: "core_freq_min=0\nhdmi_enable_4kp60=0".into(),
+            state_at_modprobe: RefCell::default(),
         }
     }
     fn calls(&self, program: &str) -> Vec<String> {
@@ -103,6 +106,9 @@ impl Host for Fake {
             .push(format!("{program} {}", args.join(" ")));
         let modules = self.root.join("lib/modules").join(KERNEL_RELEASE);
         let ours = format!("{MODULE_DIR}/{MODULE_FILE}");
+        if program == "modprobe" {
+            *self.state_at_modprobe.borrow_mut() = fs::read_to_string(self.root.join(STATE)).ok();
+        }
         match program {
             "dpkg-query" if !self.dpkg_ok => bail!("dpkg-query: database locked"),
             "dpkg-query" if args.contains(&"-f=${Version}") => Ok(self.package.clone()),
@@ -230,6 +236,7 @@ core_freq_min=500
 hdmi_enable_4kp60=1
 dtoverlay=gpio-fan,gpiopin=14,temp=60000
 dtoverlay=ungoggled-hevc-cma
+dtoverlay=
 # <<< ungoggled system fixes
 ";
 
@@ -338,7 +345,7 @@ fn stock_config_gets_the_cma_size_on_its_vc4_line() {
 #[test]
 fn cma_size_is_only_raised_and_only_on_an_unambiguous_line() {
     let edit = |line: &str| {
-        let e = edit_config(format!("a=1\n{line}\n").as_bytes(), false).unwrap();
+        let e = edit_config(format!("a=1\n{line}\n").as_bytes(), false, false).unwrap();
         (e.text.lines().nth(1).unwrap().to_owned(), e.missing)
     };
     assert_eq!(
@@ -371,7 +378,7 @@ fn cma_size_is_only_raised_and_only_on_an_unambiguous_line() {
     ] {
         let (_, missing) = edit(odd);
         assert_eq!(missing, ["cma"], "{odd}");
-        let e = edit_config(format!("a=1\n{odd}\n").as_bytes(), false).unwrap();
+        let e = edit_config(format!("a=1\n{odd}\n").as_bytes(), false, false).unwrap();
         assert!(e.text.contains(odd), "{odd} changed");
     }
 }
@@ -381,6 +388,7 @@ fn someone_elses_core_freq_min_is_respected() {
     let e = edit_config(
         b"dtoverlay=vc4-kms-v3d,cma-size=0x28000000\ncore_freq_min=600\n",
         false,
+        false,
     )
     .unwrap();
     assert!(!e.text.contains("core_freq_min=500"));
@@ -388,6 +396,7 @@ fn someone_elses_core_freq_min_is_respected() {
     let e = edit_config(
         b"dtoverlay=vc4-kms-v3d,cma-size=0x28000000\n[all]\ncore_freq_min=500\n",
         true,
+        false,
     )
     .unwrap();
     assert_eq!(e.text.matches("core_freq_min").count(), 1);
@@ -396,27 +405,32 @@ fn someone_elses_core_freq_min_is_respected() {
     let e = edit_config(
         b"dtoverlay=vc4-kms-v3d,cma-size=0x28000000\n[pi5]\ncore_freq_min=600\n",
         false,
+        false,
     )
     .unwrap();
     assert!(e.text.ends_with(
         "[all]\ncore_freq_min=500\nhdmi_enable_4kp60=1\ndtoverlay=gpio-fan,gpiopin=14,temp=60000\n\
-                 # <<< ungoggled system fixes\n"
+                 dtoverlay=\n# <<< ungoggled system fixes\n"
     ));
 }
 
 #[test]
 fn crlf_files_keep_crlf_and_files_without_final_newline_get_one() {
-    let e = edit_config(b"dtoverlay=vc4-kms-v3d\r\narm_64bit=1\r\n", true).unwrap();
+    let e = edit_config(b"dtoverlay=vc4-kms-v3d\r\narm_64bit=1\r\n", true, false).unwrap();
     assert!(e.text.ends_with("# <<< ungoggled system fixes\r\n"));
     assert!(!e.text.replace("\r\n", "").contains('\n'));
-    let e = edit_config(b"dtoverlay=vc4-kms-v3d\narm_64bit=1", false).unwrap();
+    let e = edit_config(b"dtoverlay=vc4-kms-v3d\narm_64bit=1", false, false).unwrap();
     assert_eq!(
         e.text,
         "dtoverlay=vc4-kms-v3d,cma-size=0x28000000\narm_64bit=1\n\n\
          # >>> ungoggled system fixes (managed automatically, edits here are replaced)\n[all]\ncore_freq_min=500\n\
-         hdmi_enable_4kp60=1\ndtoverlay=gpio-fan,gpiopin=14,temp=60000\n# <<< ungoggled system fixes\n"
+         hdmi_enable_4kp60=1\ndtoverlay=gpio-fan,gpiopin=14,temp=60000\ndtoverlay=\n\
+         # <<< ungoggled system fixes\n"
     );
-    assert_eq!(edit_config(e.text.as_bytes(), false).unwrap().text, e.text);
+    assert_eq!(
+        edit_config(e.text.as_bytes(), false, false).unwrap().text,
+        e.text
+    );
 }
 
 #[test]
@@ -704,6 +718,7 @@ fn someone_elses_4k60_and_fan_settings_are_respected() {
         format!("{base}[all]\nhdmi_enable_4kp60=1\ndtoverlay=gpio-fan,gpiopin=12,temp=70000\n")
             .as_bytes(),
         false,
+        false,
     )
     .unwrap();
     assert_eq!(e.text.matches("hdmi_enable_4kp60").count(), 1);
@@ -711,12 +726,18 @@ fn someone_elses_4k60_and_fan_settings_are_respected() {
     assert!(e.text.contains("gpiopin=12,temp=70000"));
     assert!(e.missing.is_empty(), "{:?}", e.missing);
     // Switched off on purpose: left alone and reported.
-    let e = edit_config(format!("{base}hdmi_enable_4kp60=0\n").as_bytes(), false).unwrap();
+    let e = edit_config(
+        format!("{base}hdmi_enable_4kp60=0\n").as_bytes(),
+        false,
+        false,
+    )
+    .unwrap();
     assert_eq!(e.text.matches("hdmi_enable_4kp60").count(), 1);
     assert_eq!(e.missing, ["hdmi_enable_4kp60"]);
     // Under a filter that does not match a Pi 4 it does not count.
     let e = edit_config(
         format!("{base}[pi5]\nhdmi_enable_4kp60=0\ndtoverlay=gpio-fan,gpiopin=2\n").as_bytes(),
+        false,
         false,
     )
     .unwrap();
@@ -725,6 +746,7 @@ fn someone_elses_4k60_and_fan_settings_are_respected() {
     // A different overlay whose name merely starts like the fan's is not one.
     let e = edit_config(
         format!("{base}dtoverlay=gpio-fan-extra\n").as_bytes(),
+        false,
         false,
     )
     .unwrap();
@@ -745,7 +767,7 @@ fn hdmi_4kp60_is_never_added_next_to_hevc_overclock_or_voltage_changes() {
         ("over_voltage=2\n", "over_voltage=2"),
         ("[all]\nhevc_freq=650\n", "hevc_freq=650"),
     ] {
-        let e = edit_config(format!("{base}{tuning}").as_bytes(), false).unwrap();
+        let e = edit_config(format!("{base}{tuning}").as_bytes(), false, false).unwrap();
         assert!(
             !e.text.contains("hdmi_enable_4kp60"),
             "{line} must keep 4kp60 out:\n{}",
@@ -764,7 +786,7 @@ fn hdmi_4kp60_is_never_added_next_to_hevc_overclock_or_voltage_changes() {
         "over_voltage_delta=0\n",
         "[pi5]\nhevc_freq=900\n",
     ] {
-        let e = edit_config(format!("{base}{fine}").as_bytes(), false).unwrap();
+        let e = edit_config(format!("{base}{fine}").as_bytes(), false, false).unwrap();
         assert!(
             e.text.contains("hdmi_enable_4kp60=1"),
             "{fine}:\n{}",
@@ -773,23 +795,357 @@ fn hdmi_4kp60_is_never_added_next_to_hevc_overclock_or_voltage_changes() {
         assert!(e.missing.is_empty(), "{fine}: {:?}", e.missing);
     }
     // A line from an earlier release is taken out again once such tuning appears.
-    let before = edit_config(base.as_bytes(), false).unwrap();
+    let before = edit_config(base.as_bytes(), false, false).unwrap();
     assert!(before.text.contains("hdmi_enable_4kp60=1"));
     let tuned = format!("{}hevc_freq=600\n", before.text);
-    let after = edit_config(tuned.as_bytes(), false).unwrap();
+    let after = edit_config(tuned.as_bytes(), false, false).unwrap();
     assert!(!after.text.contains("hdmi_enable_4kp60"), "{}", after.text);
 }
 
 /// The test Pi's `config.txt` after the owner had added both lines by hand
-/// next to the block: a run must change nothing.
+/// next to the block: a run keeps them and only closes the overlay's
+/// parameter scope at the end of the block; the next run changes nothing.
 #[test]
 fn lines_added_by_hand_next_to_the_block_survive_a_run() {
-    let config = format!(
-        "{IMAGE_CONFIG}\n# >>> ungoggled system fixes (managed automatically, edits here are replaced)\n\
-         [all]\ncore_freq_min=500\ndtoverlay=ungoggled-hevc-cma\n# <<< ungoggled system fixes\n\
-         hdmi_enable_4kp60=1\n[all]\ndtoverlay=gpio-fan,gpiopin=14,temp=60000\n"
-    );
-    let e = edit_config(config.as_bytes(), true).unwrap();
-    assert_eq!(e.text, config);
+    let config = |closer: &str| {
+        format!(
+            "{IMAGE_CONFIG}\n# >>> ungoggled system fixes (managed automatically, edits here are replaced)\n\
+             [all]\ncore_freq_min=500\ndtoverlay=ungoggled-hevc-cma\n{closer}# <<< ungoggled system fixes\n\
+             hdmi_enable_4kp60=1\n[all]\ndtoverlay=gpio-fan,gpiopin=14,temp=60000\n"
+        )
+    };
+    let e = edit_config(config("").as_bytes(), true, false).unwrap();
+    assert_eq!(e.text, config("dtoverlay=\n"));
     assert!(e.missing.is_empty(), "{:?}", e.missing);
+    assert_eq!(
+        edit_config(e.text.as_bytes(), true, false).unwrap().text,
+        e.text
+    );
+}
+
+/// S2: a `dtparam=` line appended below the block must not end up as a
+/// parameter of our last overlay.
+#[test]
+fn the_block_closes_its_overlay_parameter_scope() {
+    let e = edit_config(b"dtoverlay=vc4-kms-v3d,cma-size=0x28000000\n", true, false).unwrap();
+    assert!(
+        e.text
+            .ends_with("dtoverlay=ungoggled-hevc-cma\ndtoverlay=\n# <<< ungoggled system fixes\n"),
+        "{}",
+        e.text
+    );
+    // Lines appended below by someone else stay where they are.
+    let appended = format!("{}dtparam=i2c_arm=on\n", e.text);
+    let again = edit_config(appended.as_bytes(), true, false).unwrap();
+    assert_eq!(again.text, appended);
+    // The empty overlay line is ours, not a foreign overlay, and pending()
+    // does not trip over it.
+    assert!(again.missing.is_empty(), "{:?}", again.missing);
+    // A block without any overlay line gets no closer.
+    let e = edit_config(
+        format!(
+            "dtoverlay=vc4-kms-v3d,cma-size=0x28000000\ndtoverlay=gpio-fan,gpiopin=12\n{NO_FAN}\n"
+        )
+        .as_bytes(),
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(!e.text.contains("dtoverlay=\n"), "{}", e.text);
+}
+
+fn write(root: &Path, path: &str, bytes: &[u8]) {
+    let p = root.join(path);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, bytes).unwrap();
+}
+
+/// S3: GPIO 14 used by the app's settings, by the serial console, or opted
+/// out of by the owner: no fan line from us, everything else unchanged.
+#[test]
+fn the_fan_line_stays_out_when_gpio_14_has_another_user() {
+    let base = "dtoverlay=vc4-kms-v3d,cma-size=0x28000000\n";
+    let fan = "dtoverlay=gpio-fan,gpiopin=14,temp=60000";
+    let e = edit_config(base.as_bytes(), false, true).unwrap();
+    assert!(!e.text.contains("gpio-fan"), "{}", e.text);
+    assert!(e.text.contains("core_freq_min=500"));
+    assert!(e.missing.is_empty(), "{:?}", e.missing);
+    assert!(
+        e.notes
+            .iter()
+            .any(|n| n == "gpio-fan: skipped: GPIO 14 is used by the settings"),
+        "{:?}",
+        e.notes
+    );
+    for (extra, note) in [
+        (format!("{NO_FAN}\n"), "is in config.txt"),
+        ("#UNGOGGLED:   no-fan\n".to_owned(), "is in config.txt"),
+        (
+            "[pi5]\n# ungoggled: no-fan\n".to_owned(),
+            "is in config.txt",
+        ),
+        ("enable_uart=1\n".to_owned(), "enable_uart=1"),
+        ("[all]\nenable_uart=1\n".to_owned(), "enable_uart=1"),
+    ] {
+        let e = edit_config(format!("{base}{extra}").as_bytes(), false, false).unwrap();
+        assert!(!e.text.contains(fan), "{extra}:\n{}", e.text);
+        assert!(e.text.contains(&extra), "{extra} stays");
+        assert!(e.notes.iter().any(|n| n.contains(note)), "{:?}", e.notes);
+        assert!(e.missing.is_empty(), "{extra}: {:?}", e.missing);
+    }
+    // Not an opt-out: switched off UART, a UART for another Pi, a marker
+    // inside the block (replaced on every run), other comments.
+    for extra in [
+        "enable_uart=0\n",
+        "[pi5]\nenable_uart=1\n",
+        "# ungoggled: no-fan please\n",
+        "#dtoverlay=gpio-fan\n",
+    ] {
+        let e = edit_config(format!("{base}{extra}").as_bytes(), false, false).unwrap();
+        assert!(e.text.contains(fan), "{extra}:\n{}", e.text);
+    }
+    let with_block = edit_config(base.as_bytes(), false, false).unwrap().text;
+    let marker_inside = with_block.replace("[all]\n", &format!("[all]\n{NO_FAN}\n"));
+    let e = edit_config(marker_inside.as_bytes(), false, false).unwrap();
+    assert_eq!(e.text, with_block);
+    // A fan line from an earlier run goes once the opt-out appears.
+    let e = edit_config(format!("{with_block}{NO_FAN}\n").as_bytes(), false, false).unwrap();
+    assert!(!e.text.contains(fan), "{}", e.text);
+}
+
+#[test]
+fn the_settings_pins_decide_about_the_fan_line() {
+    // No default pin of the app is the fan's.
+    for pin in [
+        crate::hardware::DEFAULT_BEEPER_PIN,
+        crate::hardware::DEFAULT_POWER_BUTTON_PIN,
+        crate::hardware::DEFAULT_GOGGLES_LED_PIN,
+        crate::hardware::DEFAULT_VIDEO_LED_PIN,
+        crate::hardware::DEFAULT_HDMI_LED_PIN,
+    ] {
+        assert_ne!(u32::from(pin), FAN_GPIO);
+    }
+    let fan = "dtoverlay=gpio-fan,gpiopin=14,temp=60000";
+    for (settings, listed) in [
+        (None, true),
+        (
+            Some(&br#"{"beeper_pin":6,"buttons":[{"pin":5,"action":"reboot"}]}"#[..]),
+            true,
+        ),
+        (Some(&br#"{"beeper_pin":14}"#[..]), false),
+        (
+            Some(&br#"{"hdmi_led_pin":14,"beeper_pin":null}"#[..]),
+            false,
+        ),
+        (
+            Some(
+                &br#"{"buttons":[{"pin":9,"action":"reboot"},{"pin":14,"action":"shutdown"}]}"#[..],
+            ),
+            false,
+        ),
+        // A field this release does not know yet still counts.
+        (Some(&br#"{"fan_relay_pin":14}"#[..]), false),
+        // Damaged or not an object: no pins.
+        (Some(&b"{\"beeper_pin\":14"[..]), true),
+        (Some(&b"[14]"[..]), true),
+        (Some(&b""[..]), true),
+    ] {
+        let pi = Pi::new(Some(IMAGE_CONFIG));
+        if let Some(s) = settings {
+            write(&pi.root, SETTINGS, s);
+        }
+        let r = apply(&pi.options(KERNEL_RELEASE), &Fake::new(&pi.root));
+        assert_eq!(
+            pi.config().contains(fan),
+            listed,
+            "{:?}",
+            settings.map(String::from_utf8_lossy)
+        );
+        assert!(r.missing.is_empty(), "{r:?}");
+    }
+    // The pin given back in the settings: the line returns on the next run.
+    let pi = Pi::new(Some(IMAGE_CONFIG));
+    let host = Fake::new(&pi.root);
+    write(&pi.root, SETTINGS, br#"{"beeper_pin":14}"#);
+    apply(&pi.options(KERNEL_RELEASE), &host);
+    assert!(!pi.config().contains(fan));
+    write(&pi.root, SETTINGS, br#"{"beeper_pin":6}"#);
+    apply(&pi.options(KERNEL_RELEASE), &host);
+    assert_eq!(pi.config(), format!("{IMAGE_CONFIG}\n{BLOCK}"));
+}
+
+/// S4: the packages put on hold are on disk before the module check, which
+/// may sit in modprobe for up to 30 s; a run killed there keeps the record.
+#[test]
+fn the_hold_is_recorded_before_the_module_check() {
+    let pi = Pi::new(Some(IMAGE_CONFIG));
+    fs::create_dir_all(pi.root.join(DECODER_NODE)).unwrap();
+    let host = Fake::new(&pi.root);
+    let mut o = pi.options(KERNEL_RELEASE);
+    o.live = true;
+    apply(&o, &host);
+    assert_eq!(host.calls("modprobe").len(), 1);
+    let saved: State =
+        serde_json::from_str(host.state_at_modprobe.borrow().as_deref().unwrap()).unwrap();
+    assert_eq!(saved.held.len(), 7, "{saved:?}");
+    assert_eq!(saved.held, *host.held.borrow());
+}
+
+/// S5: an install that keeps failing is tried once per boot, not before
+/// every service start, and writes nothing to the boot partition.
+#[test]
+fn a_failing_install_is_retried_once_per_boot() {
+    let pi = Pi::new(Some(IMAGE_CONFIG));
+    let mut host = Fake::new(&pi.root);
+    host.chosen = Some("/lib/modules/x/extra/rpi-hevc-dec.ko\n".into());
+    // The decoder is loaded (stock), so check_loaded never probes.
+    fs::create_dir_all(pi.root.join("sys/module/rpi_hevc_dec")).unwrap();
+    write(&pi.root, BOOT_ID, b"boot-1\n");
+    let mut o = pi.options(KERNEL_RELEASE);
+    o.live = true;
+    let r = apply(&o, &host);
+    assert!(r.lines[0].contains("not installed"), "{r:?}");
+    assert!(!pi.module().exists() && !pi.overlay().exists());
+    assert!(!pi.config().contains("ungoggled-hevc-cma"));
+    assert!(
+        pi.state()
+            .install_failed
+            .is_some_and(|f| f.boot_id == "boot-1" && f.reason.contains("instead"))
+    );
+    // Same boot: no install, no depmod, no overlay file.
+    host.clear();
+    let r = apply(&o, &host);
+    assert!(r.lines[0].contains("failed earlier in this boot"), "{r:?}");
+    assert!(host.calls("depmod").is_empty() && host.calls("modinfo").len() == 1);
+    assert!(!pi.module().exists() && !pi.overlay().exists());
+    assert!(r.missing.contains(&"module"));
+    // After a reboot it is tried again, and a success clears the record.
+    write(&pi.root, BOOT_ID, b"boot-2\n");
+    host.chosen = None;
+    host.clear();
+    let r = apply(&o, &host);
+    assert!(
+        r.lines[0].starts_with("HEVC decoder module: installed"),
+        "{r:?}"
+    );
+    assert!(pi.module().is_file() && pi.overlay().is_file());
+    assert!(pi.config().contains("ungoggled-hevc-cma"));
+    assert_eq!(pi.state().install_failed, None);
+    // Offline (an image build) there is no boot id: always tried, never
+    // recorded.
+    let pi = Pi::new(Some(IMAGE_CONFIG));
+    let mut host = Fake::new(&pi.root);
+    host.chosen = Some("/lib/modules/x/extra/rpi-hevc-dec.ko\n".into());
+    apply(&pi.options(KERNEL_RELEASE), &host);
+    assert_eq!(pi.state().install_failed, None);
+    host.clear();
+    apply(&pi.options(KERNEL_RELEASE), &host);
+    assert_eq!(host.calls("depmod").len(), 2);
+}
+
+/// S6: a `config.txt` that is gone, empty or full of NUL bytes is restored
+/// from the backup before the latest change, then fixed as usual.
+#[test]
+fn a_lost_config_is_restored_from_the_previous_backup() {
+    let damaged: &[u8] = b"dtoverlay=vc4\0\0\0\0\0\0";
+    for lost in [None, Some(&b""[..]), Some(damaged)] {
+        let pi = Pi::new(Some(IMAGE_CONFIG));
+        let host = Fake::new(&pi.root);
+        apply(&pi.options(KERNEL_RELEASE), &host);
+        let good = pi.config();
+        let path = pi.root.join(BOOT).join("config.txt");
+        match lost {
+            None => fs::remove_file(&path).unwrap(),
+            Some(b) => fs::write(&path, b).unwrap(),
+        }
+        let r = apply(&pi.options(KERNEL_RELEASE), &host);
+        assert!(r.lines.iter().any(|l| l.contains("restored")), "{r:?}");
+        assert!(r.missing.is_empty(), "{r:?}");
+        assert_eq!(pi.config(), good, "{lost:?}");
+        let kept = pi.root.join(BOOT).join("config.txt.ungoggled-damaged");
+        assert_eq!(
+            fs::read(&kept).ok().as_deref(),
+            lost.filter(|b| !b.is_empty()),
+            "{lost:?}"
+        );
+        assert!(pi.leftovers().is_empty());
+    }
+    // Shapes that may be the owner's doing are not overwritten.
+    for odd in [
+        format!("{BLOCK}{BLOCK}").into_bytes(),
+        "x".repeat(MAX_CONFIG + 1).into_bytes(),
+        b"a=1\n\xff\n".to_vec(),
+    ] {
+        let pi = Pi::new(Some(IMAGE_CONFIG));
+        apply(&pi.options(KERNEL_RELEASE), &Fake::new(&pi.root));
+        fs::write(pi.root.join(BOOT).join("config.txt"), &odd).unwrap();
+        let r = apply(&pi.options(KERNEL_RELEASE), &Fake::new(&pi.root));
+        assert_eq!(
+            fs::read(pi.root.join(BOOT).join("config.txt")).unwrap(),
+            odd
+        );
+        assert!(r.missing.contains(&"config"));
+    }
+    // A backup this code would not edit is not used either.
+    let pi = Pi::new(None);
+    let prev = pi.root.join(BOOT).join("config.txt.ungoggled-prev");
+    fs::write(&prev, format!("{BLOCK}{BLOCK}")).unwrap();
+    let r = apply(&pi.options(KERNEL_RELEASE), &Fake::new(&pi.root));
+    assert!(!pi.root.join(BOOT).join("config.txt").exists());
+    assert!(
+        r.lines.iter().any(|l| l.contains("cannot restore")),
+        "{r:?}"
+    );
+    assert!(r.missing.contains(&"config"));
+}
+
+/// S7: values the firmware prints in another form, and the overlay file in
+/// the branch where the kernel package cannot be checked.
+#[test]
+fn pending_compares_numbers_and_needs_the_overlay_file() {
+    assert!(same_value("0500", "500"));
+    assert!(same_value("0x1f4", "500"));
+    assert!(same_value(" 1", "1"));
+    assert!(!same_value("500", "550"));
+    assert!(!same_value("fast", "500"));
+    assert!(same_value("fast", "fast"));
+    let pi = Pi::new(Some(
+        "dtoverlay=vc4-kms-v3d,cma-size=0x28000000\ncore_freq_min=0500\nhdmi_enable_4kp60=01\n",
+    ));
+    let mut host = Fake::new(&pi.root);
+    host.vcgencmd = "core_freq_min=500\nhdmi_enable_4kp60=1".into();
+    assert_eq!(pending(&pi.root, &host), Vec::<String>::new());
+    host.vcgencmd = "core_freq_min=250\nhdmi_enable_4kp60=1".into();
+    assert_eq!(pending(&pi.root, &host).len(), 1);
+
+    // Module in place, overlay file lost, dpkg-query not answering: the
+    // overlay line goes instead of promising a pool that never appears.
+    let pi = Pi::new(Some(IMAGE_CONFIG));
+    let mut host = Fake::new(&pi.root);
+    apply(&pi.options(KERNEL_RELEASE), &host);
+    assert!(pi.config().contains("dtoverlay=ungoggled-hevc-cma"));
+    fs::remove_file(pi.overlay()).unwrap();
+    host.dpkg_ok = false;
+    apply(&pi.options(KERNEL_RELEASE), &host);
+    assert!(pi.module().is_file());
+    assert!(
+        !pi.config().contains("ungoggled-hevc-cma"),
+        "{}",
+        pi.config()
+    );
+    // Back once the check runs again.
+    host.dpkg_ok = true;
+    apply(&pi.options(KERNEL_RELEASE), &host);
+    assert!(pi.overlay().is_file() && pi.config().contains("ungoggled-hevc-cma"));
+}
+
+#[test]
+fn pending_inputs_change_with_what_the_cli_changes() {
+    let pi = Pi::new(Some(IMAGE_CONFIG));
+    let before = pending_inputs(&pi.root);
+    apply(&pi.options(KERNEL_RELEASE), &Fake::new(&pi.root));
+    let after = pending_inputs(&pi.root);
+    assert_ne!(before, after);
+    assert!(after[..3].iter().all(Option::is_some), "{after:?}");
+    assert_eq!(pending_inputs(&pi.root), after);
 }

@@ -1,3 +1,4 @@
+use crate::sync::LockExt;
 use crate::{App, assets, auth, auth::Check, settings, terminal, wifi};
 use axum::{
     Json, Router,
@@ -375,7 +376,7 @@ async fn set_time(
     let worker = a.clone();
     tokio::task::spawn_blocking(move || {
         let a = worker;
-        let _lock = a.operations.lock().unwrap();
+        let _lock = a.operations.lock_ok();
         crate::update::api::ensure_idle()?;
         crate::clock::apply(c.unix_ms, c.timezone.as_deref())
     })
@@ -383,6 +384,7 @@ async fn set_time(
     .map_err(bad)?
     .map_err(bad)?;
     a.time_synced.store(true, Ordering::Relaxed);
+    crate::clock::mark_synced();
     let clock = crate::clock::now();
     Ok(Json(json!({
         "saved": true,
@@ -407,7 +409,7 @@ fn try_operations(a: &App) -> ApiResult<std::sync::MutexGuard<'_, ()>> {
 async fn power_action(a: App, h: HeaderMap, verb: &'static str) -> ApiResult<Json<Value>> {
     guard(&h)?;
     let _operations = try_operations(&a)?;
-    crate::update::api::ensure_idle().map_err(bad)?;
+    crate::update::api::ensure_power_allowed().map_err(bad)?;
     // Return before the connection this response travels over goes down.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -454,7 +456,7 @@ async fn save_settings(
     let always_ap = s.wifi_always_ap;
     let goggles_changed = s.goggles != a.settings.get().goggles;
     tokio::task::spawn_blocking(move || {
-        let _lock = a.operations.lock().unwrap();
+        let _lock = a.operations.lock_ok();
         crate::update::api::ensure_idle()?;
         let result = a.settings.save(s);
         // Keeps a client profile saved from an earlier join in sync with a
@@ -479,7 +481,7 @@ struct HistoryQuery {
     since: Option<f64>,
 }
 async fn history(State(a): State<App>, Query(q): Query<HistoryQuery>) -> Json<Value> {
-    Json(a.history.lock().unwrap().snapshot(q.since))
+    Json(a.history.lock_ok().snapshot(q.since))
 }
 async fn images(State(a): State<App>) -> ApiResult<Json<Value>> {
     let dir = a.settings.dir.join("images");
@@ -525,7 +527,7 @@ async fn upload(
     let name = field.file_name().map(str::to_owned);
     let bytes = field.bytes().await.map_err(bad)?;
     let result = tokio::task::spawn_blocking(move || {
-        let _lock = a.operations.lock().unwrap();
+        let _lock = a.operations.lock_ok();
         crate::update::api::ensure_idle()?;
         assets::upload(&a.settings.dir.join("images"), &bytes, name.as_deref())
     })
@@ -612,7 +614,7 @@ async fn remove_image(
         return Err(bad("Invalid image"));
     }
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let _lock = a.operations.lock().unwrap();
+        let _lock = a.operations.lock_ok();
         crate::update::api::ensure_idle()?;
         if a.settings.get().fallback_image.as_deref() == Some(&id) {
             anyhow::bail!("Pick another idle screen before deleting this one");
@@ -626,7 +628,7 @@ async fn remove_image(
     Ok(Json(json!({"deleted":true})))
 }
 async fn preview(State(a): State<App>) -> Response {
-    let frame = a.preview.lock().unwrap();
+    let frame = a.preview.lock_ok();
     if let Some((time, bytes)) = &*frame
         && time.elapsed() < Duration::from_secs(2)
     {
@@ -677,7 +679,7 @@ async fn play_usb_video(
         .storage
         .resolve(&id)
         .ok_or_else(|| bad("Unknown video; rescan the USB drive"))?;
-    let already_loaded = a.usb_playback.lock().unwrap().as_deref() == Some(path.as_path());
+    let already_loaded = a.usb_playback.lock_ok().as_deref() == Some(path.as_path());
     if already_loaded {
         // mpv stays running (and idle) after reaching EOF by design, so this
         // same path is indistinguishable from "nothing changed" to the
@@ -693,13 +695,13 @@ async fn play_usb_video(
         .map_err(bad)?
         .map_err(bad)?;
     } else {
-        *a.usb_playback.lock().unwrap() = Some(path);
+        *a.usb_playback.lock_ok() = Some(path);
     }
     Ok(Json(json!({"accepted":true})))
 }
 async fn stop_usb_video(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
     guard(&h)?;
-    *a.usb_playback.lock().unwrap() = None;
+    *a.usb_playback.lock_ok() = None;
     Ok(Json(json!({"accepted":true})))
 }
 /// Position and duration come from mpv's IPC socket, so they are only asked
@@ -803,7 +805,7 @@ async fn start_recording(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<V
         .await
         .map_err(bad)?
         .map_err(bad)?;
-    *a.disk_warning.lock().unwrap() = None;
+    *a.disk_warning.lock_ok() = None;
     Ok(Json(result))
 }
 async fn stop_recording(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
@@ -814,7 +816,7 @@ async fn stop_recording(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Va
 }
 async fn dismiss_recording_warning(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
     guard(&h)?;
-    *a.disk_warning.lock().unwrap() = None;
+    *a.disk_warning.lock_ok() = None;
     Ok(Json(json!({"accepted":true})))
 }
 async fn save_recording_buffer(State(a): State<App>, h: HeaderMap) -> ApiResult<Json<Value>> {
@@ -907,7 +909,7 @@ async fn play_recording(
     if !path.is_file() {
         return Err(bad("Unknown recording"));
     }
-    *a.usb_playback.lock().unwrap() = Some(path);
+    *a.usb_playback.lock_ok() = Some(path);
     Ok(Json(json!({"accepted":true})))
 }
 async fn get_wifi(State(a): State<App>) -> ApiResult<Json<Value>> {
@@ -915,7 +917,7 @@ async fn get_wifi(State(a): State<App>) -> ApiResult<Json<Value>> {
         .await
         .map_err(bad)?;
     s["applying"] = json!(a.wifi_busy.load(Ordering::Relaxed));
-    s["error"] = json!(a.wifi_error.lock().unwrap().clone());
+    s["error"] = json!(a.wifi_error.lock_ok().clone());
     Ok(Json(s))
 }
 /// The access point's SSID and password, for the spectator share sheet's
@@ -944,7 +946,7 @@ async fn save_wifi(
             return Err(bad("Wi-Fi change already in progress"));
         }
     }
-    *a.wifi_error.lock().unwrap() = None;
+    *a.wifi_error.lock_ok() = None;
     // Return before restarting the AP that carries this HTTP connection.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -953,7 +955,7 @@ async fn save_wifi(
             .map_err(|e| e.to_string())
             .and_then(|r| r.map_err(|e| e.to_string()))
         {
-            *a.wifi_error.lock().unwrap() = Some(e);
+            *a.wifi_error.lock_ok() = Some(e);
         }
         a.wifi_busy.store(false, Ordering::Relaxed);
     });
@@ -987,7 +989,7 @@ async fn get_wifi_client(State(a): State<App>) -> ApiResult<Json<Value>> {
         .await
         .map_err(bad)?;
     s["applying"] = json!(a.wifi_busy.load(Ordering::Relaxed));
-    s["error"] = json!(a.wifi_error.lock().unwrap().clone());
+    s["error"] = json!(a.wifi_error.lock_ok().clone());
     Ok(Json(s))
 }
 async fn join_wifi_client(
@@ -1006,7 +1008,7 @@ async fn join_wifi_client(
             return Err(bad("Wi-Fi change already in progress"));
         }
     }
-    *a.wifi_error.lock().unwrap() = None;
+    *a.wifi_error.lock_ok() = None;
     let always_ap = a.settings.get().wifi_always_ap;
     // Return before switching away from the AP that carries this HTTP connection.
     tokio::spawn(async move {
@@ -1016,7 +1018,7 @@ async fn join_wifi_client(
             .map_err(|e| e.to_string())
             .and_then(|r| r.map_err(|e| e.to_string()))
         {
-            *a.wifi_error.lock().unwrap() = Some(e);
+            *a.wifi_error.lock_ok() = Some(e);
         }
         a.wifi_busy.store(false, Ordering::Relaxed);
     });
@@ -1035,7 +1037,7 @@ async fn leave_wifi_client(State(a): State<App>, h: HeaderMap) -> ApiResult<Json
             return Err(bad("Wi-Fi change already in progress"));
         }
     }
-    *a.wifi_error.lock().unwrap() = None;
+    *a.wifi_error.lock_ok() = None;
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let result = tokio::task::spawn_blocking(wifi::leave_client).await;
@@ -1043,7 +1045,7 @@ async fn leave_wifi_client(State(a): State<App>, h: HeaderMap) -> ApiResult<Json
             .map_err(|e| e.to_string())
             .and_then(|r| r.map_err(|e| e.to_string()))
         {
-            *a.wifi_error.lock().unwrap() = Some(e);
+            *a.wifi_error.lock_ok() = Some(e);
         }
         a.wifi_busy.store(false, Ordering::Relaxed);
     });

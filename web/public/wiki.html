@@ -1025,6 +1025,9 @@ chmod +x /var/lib/dji-hdmi/button-scripts/wifi-restart.sh</code></pre>
               <li>The spectator page works on the Pi's own Wi-Fi without internet; USB sticks are only opened as FAT, exFAT or NTFS</li>
               <li>Older phones show the console again instead of "Disconnected"; two devices no longer undo each other's settings; deleting a recording asks first</li>
               <li>Long flights are saved in parts, big recordings download without filling the Pi's memory, and several smaller fixes (Wi-Fi scan, power-button pin, USB plug-in freeze, 4K60 safety)</li>
+              <li>A damaged settings file no longer stops the Pi from starting, and changing an unrelated setting no longer blanks the screen</li>
+              <li>The Pi remembers the time across restarts, so the log and recordings carry the right date from the start; the goggles' clock is only set once the Pi's time is right</li>
+              <li>More robust start-up and boot configuration (fan, restart notice, a lost config file), reboot works even after a failed update, and a hanging USB video can no longer slow the receiver down</li>
             </ul>
           </section>
 

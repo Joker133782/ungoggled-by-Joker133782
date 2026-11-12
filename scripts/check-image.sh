@@ -47,9 +47,14 @@ ssh-keygen -q -t ed25519 -N '' -f /tmp/dji-check-hostkey
 sshd -T -h /tmp/dji-check-hostkey -C user=root,host=localhost,addr=127.0.0.1 > /tmp/dji-check-sshd
 grep -qx 'permitrootlogin yes' /tmp/dji-check-sshd
 grep -qx 'passwordauthentication yes' /tmp/dji-check-sshd
-for plugin in h264parse capssetter kmssink fpsdisplaysink jpegenc videorate videoscale videoconvert video4linux2; do
+# mpegtsmux, x264enc and avdec_h264 (spectator stream, its reduced-quality
+# mode, thumbnails) come from other plugin packages than the rest.
+for plugin in h264parse capssetter kmssink fpsdisplaysink jpegenc videorate videoscale videoconvert video4linux2 \
+    mpegtsmux x264enc avdec_h264; do
     gst-inspect-1.0 "$plugin" >/dev/null
 done
+# USB-drive video and recording playback.
+mpv --version >/dev/null
 # The control password also becomes root's SSH password; this throwaway instance
 # (it sets a throwaway password below) must leave the image's alone.
 export UNGOGGLED_KEEP_SYSTEM_PASSWORD=1

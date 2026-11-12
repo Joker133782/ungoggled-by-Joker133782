@@ -115,6 +115,11 @@ impl Watcher {
             lines.extend(note);
             lines.push(format!("status {key}: {} -> {}", show(before), show(new)));
         }
+        // A new receiver worker starts with "phase: starting": what it then
+        // says is new again, even if the previous worker said the same.
+        if event.get("phase").and_then(Value::as_str) == Some("starting") {
+            self.last_message = None;
+        }
         if let Some(Value::String(message)) = event.get("message") {
             let repeated = self
                 .last_message
@@ -368,6 +373,28 @@ mod tests {
         assert!(
             w.changes(&Map::new(), &map(json!({"message":""})), t)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_message_repeated_after_a_worker_restart_is_logged_again() {
+        let mut w = Watcher::default();
+        let t = Instant::now();
+        let ready = map(json!({"message":"FunctionFS ready for goggles"}));
+        assert_eq!(w.changes(&Map::new(), &ready, t).len(), 1);
+        assert!(
+            w.changes(&Map::new(), &ready, t + Duration::from_secs(2))
+                .is_empty()
+        );
+        w.changes(
+            &Map::new(),
+            &map(json!({"phase":"starting"})),
+            t + Duration::from_secs(3),
+        );
+        assert_eq!(
+            w.changes(&Map::new(), &ready, t + Duration::from_secs(5))
+                .len(),
+            1
         );
     }
 

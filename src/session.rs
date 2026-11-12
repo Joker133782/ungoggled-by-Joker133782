@@ -88,6 +88,11 @@ pub struct Config {
     pub mode: String,
     pub g3_port: u16,
     pub sync_time: bool,
+    /// The Pi's clock is only told to the air unit while this file exists
+    /// (`clock::SYNCED_MARKER`): without a battery clock the Pi boots with the
+    /// time of its last shutdown, and the air unit's own (right) clock, set by
+    /// the DJI app, must not be overwritten with that.
+    pub clock_marker: PathBuf,
     /// Learned protocol per goggles identification (auto mode only).
     pub memory: Option<PathBuf>,
     /// AOA identification strings the goggles sent while connecting.
@@ -359,6 +364,7 @@ impl Driver<'_> {
                 self.send(&packet)?;
             }
             if self.cfg.sync_time
+                && self.cfg.clock_marker.exists()
                 && let Some(clock) = clock::now()
             {
                 let packet = protocol::time_sync(&mut self.seq, self.cfg.g3_port, &clock);
@@ -371,7 +377,7 @@ impl Driver<'_> {
     }
 
     fn arm_g2(&mut self, deadline: Option<Instant>) -> io::Result<bool> {
-        let clock = if self.cfg.sync_time {
+        let clock = if self.cfg.sync_time && self.cfg.clock_marker.exists() {
             clock::now()
         } else {
             None
@@ -432,6 +438,7 @@ impl Driver<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync::LockExt;
     use std::sync::{Arc, Mutex};
 
     fn fast() -> Timing {
@@ -486,11 +493,11 @@ mod tests {
             let streaming = streaming.clone();
             thread::spawn(move || {
                 while start.elapsed() < run_for {
-                    if *streaming.lock().unwrap() && air_on() {
+                    if *streaming.lock_ok() && air_on() {
                         shared.video.fetch_add(1000, Ordering::Relaxed);
                     } else {
                         // Air unit power-cycled: goggles stop until re-requested.
-                        *streaming.lock().unwrap() = false;
+                        *streaming.lock_ok() = false;
                     }
                     thread::sleep(Duration::from_millis(5));
                 }
@@ -502,6 +509,7 @@ mod tests {
             sync_time: false,
             memory,
             aoa: aoa.iter().map(|s| s.to_string()).collect(),
+            clock_marker: PathBuf::from("/nonexistent/clock-marker"),
         };
         let t = fast();
         let l = log.clone();
@@ -513,18 +521,13 @@ mod tests {
             let duml = &p[8..];
             assert!(protocol::valid(duml));
             let (set, id) = (duml[9], duml[10]);
-            l.lock().unwrap().push((Instant::now(), port, set, id));
-            let mut s = streaming.lock().unwrap();
+            l.lock_ok().push((Instant::now(), port, set, id));
+            let mut s = streaming.lock_ok();
             match model {
                 Model::G3 if port == 0x5749 && (set, id) == (0, 0x99) && air_on() => *s = true,
-                Model::G2 if port == 0x7530 && (set, id) == (0, 0xdd) => {
-                    *armed.lock().unwrap() = true
-                }
+                Model::G2 if port == 0x7530 && (set, id) == (0, 0xdd) => *armed.lock_ok() = true,
                 Model::G2
-                    if port == 0x7530
-                        && (set, id) == (2, 0xeb)
-                        && *armed.lock().unwrap()
-                        && air_on() =>
+                    if port == 0x7530 && (set, id) == (2, 0xeb) && *armed.lock_ok() && air_on() =>
                 {
                     *s = true
                 }
@@ -533,11 +536,11 @@ mod tests {
             Ok(())
         };
         let ev = events.clone();
-        let report = move |v: Value| ev.lock().unwrap().push(v);
+        let report = move |v: Value| ev.lock_ok().push(v);
         let result = drive(&cfg, &shared, &t, &mut tx, &report);
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         feeder.join().unwrap();
-        let events = events.lock().unwrap().clone();
+        let events = events.lock_ok().clone();
         (log, events)
     }
 
@@ -549,7 +552,7 @@ mod tests {
         )
     }
     fn on_port(log: &Log, port: u16) -> usize {
-        log.lock().unwrap().iter().filter(|e| e.1 == port).count()
+        log.lock_ok().iter().filter(|e| e.1 == port).count()
     }
     fn arming_bursts(log: &Log) -> usize {
         log.lock()
@@ -594,7 +597,7 @@ mod tests {
             .unwrap_or_default()
     }
     fn first_port(log: &Log) -> u16 {
-        log.lock().unwrap()[0].1
+        log.lock_ok()[0].1
     }
 
     #[test]
@@ -864,5 +867,46 @@ mod tests {
         // 300 ms Goggles 3, 400 ms Goggles 2, then 600, 1000, 1000... of
         // Goggles 3 between the bursts: 4 in 5 s instead of one every 0.7 s.
         assert!((3..=5).contains(&bursts), "{bursts} arming bursts");
+    }
+
+    /// What the goggles get on the control port while the Pi runs for `run_for`.
+    fn time_requests(marker: PathBuf) -> usize {
+        let shared = Shared::default();
+        let cfg = Config {
+            mode: "goggles3".into(),
+            g3_port: 0x5749,
+            sync_time: true,
+            clock_marker: marker,
+            memory: None,
+            aoa: vec![],
+        };
+        let start = Instant::now();
+        let count = std::cell::Cell::new(0usize);
+        let mut tx = |p: &[u8]| -> io::Result<()> {
+            if start.elapsed() >= S(250) {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            let duml = &p[8..];
+            if (duml[9], duml[10]) == (0, protocol::TIME_SET_CALENDAR) {
+                count.set(count.get() + 1);
+            }
+            Ok(())
+        };
+        let report = |_: Value| {};
+        let _ = drive(&cfg, &shared, &fast(), &mut tx, &report);
+        count.get()
+    }
+
+    #[test]
+    fn the_pi_clock_is_only_sent_to_the_air_unit_once_it_is_trustworthy() {
+        let marker = temp("clock-marker");
+        assert_eq!(
+            time_requests(marker.clone()),
+            0,
+            "clock never set: nothing sent"
+        );
+        std::fs::write(&marker, b"").unwrap();
+        assert!(time_requests(marker.clone()) >= 1, "clock set: sent");
+        let _ = std::fs::remove_file(&marker);
     }
 }
